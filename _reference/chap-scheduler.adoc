@@ -1,0 +1,3 @@
+== Scheduling
+
+TBD Configuration of the service, how to shedule a task, management of the scheduled tasks

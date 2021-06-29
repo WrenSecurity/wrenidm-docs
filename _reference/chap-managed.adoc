@@ -1,0 +1,3 @@
+== Managed objects
+
+TBD Schema definition, virtual properties, relationships, description of lifecycle
