@@ -1,0 +1,48 @@
+= Wren:IDM: Reference guide
+Wren Security
+:doctype: book
+ifdef::backend-pdf[:outfilesuffix: -{version}.pdf]
+:pdf-page-size: A4
+:pdf-stylesdir: _theme
+:pdf-style: wren.yml
+:toc-title: Table of contents
+:toc:
+:imagesdir: _reference
+:source-highlighter: highlight.js
+:chapter-label: Chapter
+:xrefstyle: short
+:!section-refsig:
+:!appendix-refsig:
+:listing-caption: Listing
+:table-caption: Table
+:appendix-caption: Appendix
+
+ifndef::backend-pdf[{toc}]
+
+include::_reference/pre-history.adoc[]
+
+:numbered:
+
+include::_reference/chap-intro.adoc[]
+
+include::_reference/chap-managed.adoc[]
+
+include::_reference/chap-sync.adoc[]
+
+include::_reference/chap-provisioner.adoc[]
+
+include::_reference/chap-repository.adoc[]
+
+include::_reference/chap-script.adoc[]
+
+include::_reference/chap-policy.adoc[]
+
+include::_reference/chap-scheduler.adoc[]
+
+include::_reference/chap-workflow.adoc[]
+
+include::_reference/chap-audit.adoc[]
+
+include::_reference/chap-authentication.adoc[]
+
+include::_reference/chap-email.adoc[]
