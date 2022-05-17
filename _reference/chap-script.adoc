@@ -1,3 +1,0 @@
-== Scripts
-
-TBD Configuration of the scripts, custom endpoints, available variables

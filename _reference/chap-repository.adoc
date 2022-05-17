@@ -1,3 +1,0 @@
-== Repository
-
-TBD Supported repositories, configuration files, mapping between managed objects and repository, generic vs explicit mapping, predefined commands

@@ -1,3 +1,0 @@
-== Workflow
-
-TBD Workflow configuration, process definition, process instance management, tasks management

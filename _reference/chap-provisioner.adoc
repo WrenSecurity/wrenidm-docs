@@ -1,3 +1,0 @@
-== Provisioner
-
-TBD Connectivity configuration, objects schema, default connectors and it's configuration

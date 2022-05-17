@@ -1,3 +1,0 @@
-== Authentication
-
-TBD Authentication modules, access.js description

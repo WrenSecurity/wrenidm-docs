@@ -1,0 +1,4 @@
+= Samples
+
+We have couple of samples addressing common use cases.
+For more information see https://github.com/WrenSecurity/wrenidm-cookbook[Wren:IDM Cookbook^].

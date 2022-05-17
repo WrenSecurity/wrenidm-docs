@@ -1,0 +1,5 @@
+= Links
+
+* For questions and general discussion, please use https://gitter.im/WrenSecurity/Lobby[Gitter channel^].
+* Follow the progress on the https://github.com/WrenSecurity/wrenidm[GitHub repository^].
+* Deploy your project using official https://hub.docker.com/r/wrensecurity/wrenidm[Docker images^].

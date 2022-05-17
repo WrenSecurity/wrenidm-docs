@@ -1,3 +1,0 @@
-== Synchronization
-
-TBD Mapping, synchonization situations and actions, types of synchronization (live-sync, reconciliation), lifecycle of mapped objects, links

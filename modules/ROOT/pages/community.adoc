@@ -1,0 +1,27 @@
+= Community
+
+== Get Help
+
+The following are the best ways to get help:
+
+* Read this documentation.
+* Try any sample from https://github.com/WrenSecurity/wrenidm-cookbook[Wren:IDM Cookbook^].
+* Report bugs and enhancements at https://github.com/WrenSecurity/wrenidm/issues[GitHub issues^].
+
+== Get Involved
+
+We welcome your involvement in the Wren:IDM project. There are many different ways in which you can contribute. The first step is to join our https://gitter.im/WrenSecurity/Lobby[Gitter channel^]. Here are some of the areas ways in which you can help:
+
+* Investigate bugs reported in the GitHub issues.
+* Answer questions posted to the Gitter channels.
+* Contribute to the projects documentation.
+
+For more information see https://wrensecurity.org/community/join.html#get-involved[Get Involved^] page on our website.
+
+== Contributor Guidelines
+
+If you want to start contributing changes, then the first step is to read our https://github.com/WrenSecurity/wrensec-docs/wiki/Contributor-Guidelines#introduction[Contributor Guidelines^].
+
+== Source Code
+
+You can find Wren:IDM project's source code on https://github.com/WrenSecurity/wrenidm[GitHub^].

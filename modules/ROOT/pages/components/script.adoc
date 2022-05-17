@@ -1,0 +1,3 @@
+= Scripts
+
+NOTE: TBD: Configuration of the scripts, custom endpoints, available variables
