@@ -1,3 +1,100 @@
 = Email Service
 
-NOTE: TBD: Sending of emails
+Wren:IDM provides a built-in service to send email notifications.
+The service uses external outbound email server.
+Email notifications can be sent in two ways: by a script or through REST API.
+
+
+== Outbound Server Configuration
+
+The outbound email server is configured through `external.email.json` file in `{project}/conf` directory.
+The following configuration properties are available:
+
+* `host` –⁠ SMTP server hostname (e.g. `smtp.gmail.com` or `localhost`)
+* `port` –⁠ SMTP server port (e.g. `25` or `587`)
+* `debug` –⁠ flag indicating whether _JavaMail_ debug mode is enabled (See https://javaee.github.io/javamail/FAQ#debug[JavaMail FAQ^])
+* `auth` – SMTP server authentication properties
+** `enable` – flag indicating whether authentication is required
+** `username` – account to be used to connect to the SMTP server
+** `password` – account's password
+* `starttls` – SMTP server authentication properties
+* `from` – default sender email address (optional, can be specified for each email separately)
+
+Example of configuration for Google SMTP server:
+
+----
+{
+    "host": "smtp.gmail.com",
+    "port": "587",
+    "debug": false,
+    "auth": {
+        "enable": true,
+        "username": "foobar",
+        "password": "wrensecurity"
+    },
+    "starttls": {
+        "enable": true
+    },
+    "from": "info@wrensecurity.org"
+}
+----
+
+
+== Sending Email
+
+Email notifications can be sent in two ways: by a script or through REST API.
+Both options use the same notification properties:
+
+* `from` –⁠ sender email address
+* `to` –⁠ email recipients (comma-separated list of email addresses)
+* `cc` – recipients of email copy (comma-separated list of email addresses)
+* `bcc` –⁠ recipients of email blind copy (comma-separated list of email addresses)
+* `subject` –⁠ email subject
+* `body` –⁠ email body
+* `type` –⁠ email type (`text/plain`, `text/html` or `text/xml`)
+
+
+=== Using Script
+
+You can send email notification using action resource with external/email context.
+In the following example a testing email is sent to `recipient@wrensecurity.org`:
+
+[source,js]
+----
+var params = {
+    from: 'idm@wrensecurity.org',
+    to: 'recipient@wrensecurity.org',
+    subject: 'Testing Notification',
+    type: 'text/plain',
+    body: 'This is testing email notification sent from Wren:IDM.'
+};
+openidm.action('external/email', 'send', params);
+----
+
+
+=== Using REST API
+
+You can send email notification using REST API by sending a HTTP POST request to the `/openidm/external/email` resource.
+In the following example a testing email is sent to `recipient@wrensecurity.org`:
+
+[source,bash]
+----
+curl \
+  -H "Content-Type: application/json" \
+  -u openidm-admin:openidm-admin \
+  -XPOST --data '{
+    "from":"idm@wrensecurity.org",
+    "to":"recipient@wrensecurity.org",
+    "subject":"Testing Notification",
+    "type":"text/plain",
+    "body":"This is testing email notification sent from Wren:IDM."
+   }' \
+  "http://localhost:8080/openidm/external/email?_action=send"
+----
+
+The following response is returned when the email is sent successfully:
+
+[source,json]
+----
+{ "status": "OK" }
+----
