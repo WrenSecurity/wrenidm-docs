@@ -1,14 +1,14 @@
 = Email Service
 
-Wren:IDM provides a built-in service for sending email notifications.
-Service is using outbound email server that is fully configurable.
-Email notifications can be send in two ways: by script or through REST API.
+Wren:IDM provides a built-in service to send email notifications.
+The service uses external outbound email server.
+Email notifications can be sent in two ways: by a script or through REST API.
 
 
 == Outbound Server Configuration
 
-Outbound Email Server is configured through file `external.email.json` in directory `{project}/conf`.
-Following configuration properties are available:
+The outbound email server is configured through `external.email.json` file in `{project}/conf` directory.
+The following configuration properties are available:
 
 * `host` –⁠ SMTP server hostname (e.g. `smtp.gmail.com` or `localhost`)
 * `port` –⁠ SMTP server port (e.g. `25` or `587`)
@@ -42,8 +42,8 @@ Example of configuration for Google SMTP server:
 
 == Sending Email
 
-Email notifications can be send in two ways: by script or through REST API.
-Both options are using the same notification properties:
+Email notifications can be sent in two ways: by a script or through REST API.
+Both options use the same notification properties:
 
 * `from` –⁠ sender email address
 * `to` –⁠ email recipients (comma-separated list of email addresses)
@@ -56,8 +56,8 @@ Both options are using the same notification properties:
 
 === Using Script
 
-You can send email notification using action resource with context `external/email`.
-In the following example is sent testing email to the `recipient@wrensecurity.org`:
+You can send email notification using action resource with external/email context.
+In the following example a testing email is sent to `recipient@wrensecurity.org`:
 
 [source,js]
 ----
@@ -74,8 +74,8 @@ openidm.action('external/email', 'send', params);
 
 === Using REST API
 
-You can send email notification using REST API by sending a HTTP POST request to the resource `/openidm/external/email`.
-In the following example is sent testing email to the `recipient@wrensecurity.org`:
+You can send email notification using REST API by sending a HTTP POST request to the `/openidm/external/email` resource.
+In the following example a testing email is sent to `recipient@wrensecurity.org`:
 
 [source,bash]
 ----
@@ -92,7 +92,7 @@ curl \
   "http://localhost:8080/openidm/external/email?_action=send"
 ----
 
-The following response is returned when the email is successfully sent:
+The following response is returned when the email is sent successfully:
 
 [source,json]
 ----
