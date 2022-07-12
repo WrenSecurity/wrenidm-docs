@@ -12,13 +12,13 @@ Following configuration properties are available:
 
 * `host` –⁠ SMTP server hostname (e.g. `smtp.gmail.com` or `localhost`)
 * `port` –⁠ SMTP server port (e.g. `25` or `587`)
-* `debug` –⁠ Flag indicating whether _JavaMail_ debug mode is enabled (See https://javaee.github.io/javamail/FAQ#debug[JavaMail FAQ^])
+* `debug` –⁠ flag indicating whether _JavaMail_ debug mode is enabled (See https://javaee.github.io/javamail/FAQ#debug[JavaMail FAQ^])
 * `auth` – SMTP server authentication properties
-** `enable` – Flag indicating whether authentication is required
-** `username` – Account to be used to connect to the SMTP server
-** `password` – Account's password
+** `enable` – flag indicating whether authentication is required
+** `username` – account to be used to connect to the SMTP server
+** `password` – account's password
 * `starttls` – SMTP server authentication properties
-* `from` – Default sender email address (optional, can be specified for each email separately)
+* `from` – default sender email address (optional, can be specified for each email separately)
 
 Example of configuration for Google SMTP server:
 
@@ -45,13 +45,13 @@ Example of configuration for Google SMTP server:
 Email notifications can be send in two ways: by script or through REST API.
 Both options are using the same notification properties:
 
-* `from` –⁠ Sender email address
-* `to` –⁠ Email recipients (comma-separated list of email addresses)
-* `cc` – Recipients of email copy (comma-separated list of email addresses)
-* `bcc` –⁠ Recipients of email blind copy (comma-separated list of email addresses)
-* `subject` –⁠ Email subject
-* `body` –⁠ Email body
-* `type` –⁠ Email type (`text/plain`, `text/html` or `text/xml`)
+* `from` –⁠ sender email address
+* `to` –⁠ email recipients (comma-separated list of email addresses)
+* `cc` – recipients of email copy (comma-separated list of email addresses)
+* `bcc` –⁠ recipients of email blind copy (comma-separated list of email addresses)
+* `subject` –⁠ email subject
+* `body` –⁠ email body
+* `type` –⁠ email type (`text/plain`, `text/html` or `text/xml`)
 
 
 === Using Script
