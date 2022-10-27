@@ -1,3 +1,4 @@
+[[policy-policies]]
 = Policies
 
 NOTE: TBD: Policies description, how to create custom policy
