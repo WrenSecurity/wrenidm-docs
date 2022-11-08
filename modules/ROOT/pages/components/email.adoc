@@ -1,13 +1,13 @@
 = Email Service
 
 Wren:IDM provides a built-in service to send email notifications.
-The service uses external outbound email server.
-Email notifications can be sent in two ways: by a script or through REST API.
+The service uses external outbound SMTP mail server.
+Email notifications can be sent in two ways – by a script or through REST API.
 
 
 == Outbound Server Configuration
 
-The outbound email server is configured through `external.email.json` file in `{project}/conf` directory.
+The outbound email server is configured through `external.email.json` file in `project/conf` directory.
 The following configuration properties are available:
 
 * `host` –⁠ SMTP server hostname (e.g. `smtp.gmail.com` or `localhost`)
@@ -22,20 +22,21 @@ The following configuration properties are available:
 
 Example of configuration for Google SMTP server:
 
+[source,json]
 ----
 {
-    "host": "smtp.gmail.com",
-    "port": "587",
-    "debug": false,
-    "auth": {
-        "enable": true,
-        "username": "foobar",
-        "password": "wrensecurity"
-    },
-    "starttls": {
-        "enable": true
-    },
-    "from": "info@wrensecurity.org"
+  "host": "smtp.gmail.com",
+  "port": "587",
+  "debug": false,
+  "auth": {
+    "enable": true,
+    "username": "foobar",
+    "password": "wrensecurity"
+  },
+  "starttls": {
+    "enable": true
+  },
+  "from": "info@wrensecurity.org"
 }
 ----
 
@@ -62,11 +63,11 @@ In the following example a testing email is sent to `recipient@wrensecurity.org
 [source,js]
 ----
 var params = {
-    from: 'idm@wrensecurity.org',
-    to: 'recipient@wrensecurity.org',
-    subject: 'Testing Notification',
-    type: 'text/plain',
-    body: 'This is testing email notification sent from Wren:IDM.'
+  from: 'idm@wrensecurity.org',
+  to: 'recipient@wrensecurity.org',
+  subject: 'Testing Notification',
+  type: 'text/plain',
+  body: 'This is testing email notification sent from Wren:IDM.'
 };
 openidm.action('external/email', 'send', params);
 ----
