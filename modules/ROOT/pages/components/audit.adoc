@@ -1,3 +1,163 @@
 = Audit
 
-NOTE: TBD: Audit configuration, default handlers
+Wren:IDM provides a built-in service for logging audit events.
+Internal audit components are built on top of shared components provided by _Wrensec Commons_ project.
+
+Several Wren:IDM services capture user and system interactions (e.g. user authentication or object synchronization) and generate audit events that are being routed to the central _audit service_.
+Audit service then uses preconfigured audit event handlers to further process captured events (e.g. by storing them in a database table).
+
+Audit events of all types contain common attributes that can be used to filter audit events or correlate related audit events.
+These attributes include:
+
+* `_id` – unique identification of audit event
+* `timestamp` – timestamp in ISO 8601 format with UTC time zone
+* `eventName` – type of audit event (see <<audit-event-topics>>)
+* `transactionId` – identifier linking audit events to a single originating transaction
+* `userId` – identifier of user who invoked the given action
+* `trackingIds` – additional tracking identifiers to help correlating related audit events across multiple systems
+
+
+[[audit-event-topics]]
+== Audit Event Topics
+
+Audit service handles the following event topics:
+
+* `access` – access log for CREST endpoints
+* `activity` – CREST actions performed on a specific object (e.g. update of a _managed user_)
+* `authentication` – result for an authentication attempt
+* `config` – configuration changes
+* `recon` – reconciliation events for the whole reconciliation process and every processed object
+* `sync` – result of object synchronization operation (implicit synchronization)
+
+
+== Audit Handlers
+
+Audit service provides several configurable handlers that participate in processing captured audit events.
+Following output handlers are available by default:
+
+* `CsvAuditEventHandler` – CSV files (_access.csv_, _activity.csv_, ...)
+* `ElasticsearchAuditEventHandler` – Elasticsearch full-text search engine
+* `JmsAuditEventHandler` – Java Message Service API processor
+* `JsonAuditEventHandler` – JSON files (_acess.audit.json_, _activity.audit.json_, ...)
+* `RepositoryAuditEventHandler` – tables in Wren:IDM database
+* `RouterAuditEventHandler` – any internal CREST API endpoint
+* `SplunkAuditEventHandler` – Splunk system
+* `SyslogAuditEventHandler` – Syslog server through Syslog protocol
+
+For more information see https://github.com/WrenSecurity/wrensec-commons/tree/7a02d7913209021304a93f12793010c20bd58375/audit[audit^] module in `wrensec-commons` GitHub repository.
+
+
+== Configuration
+
+The audit service is configured through `audit.json` file in `project/conf` directory.
+The following configuration properties are available:
+
+* `auditServiceConfig`
+** `handlerForQueries` – name of the audit log query handler (i.e. handler that will process audit log queries)
+** `availableAuditEventHandlers` – array of available audit handlers
+** `filterPolicies` – audit event filtering policies (policy determines whether audit event will be processed or not)
+* `eventHandlers` – audit event handler configuration
+* `eventTopics` – configuration of event topics (e.g. ignored actions / fields for the topic)
+* `exceptionFormatter` – script for formatting exceptions to be stored in audit events
+
+Example of audit service configuration with two handlers (`JsonAuditEventHandler` and `RepositoryAuditEventHandler`):
+
+[source,json]
+----
+{
+  "auditServiceConfig" : {
+    "handlerForQueries" : "repo",
+    "availableAuditEventHandlers" : [
+      "org.forgerock.audit.handlers.csv.CsvAuditEventHandler",
+      "org.forgerock.audit.handlers.elasticsearch.ElasticsearchAuditEventHandler",
+      "org.forgerock.audit.handlers.jms.JmsAuditEventHandler",
+      "org.forgerock.audit.handlers.json.JsonAuditEventHandler",
+      "org.forgerock.openidm.audit.impl.RepositoryAuditEventHandler",
+      "org.forgerock.openidm.audit.impl.RouterAuditEventHandler",
+      "org.forgerock.audit.handlers.splunk.SplunkAuditEventHandler",
+      "org.forgerock.audit.handlers.syslog.SyslogAuditEventHandler"
+    ],
+    "filterPolicies" : {
+      "value" : {
+        "excludeIf" : [
+          "/access/http/request/headers/Authorization",
+          "/access/http/request/headers/X-OpenIDM-Password",
+          "/access/http/request/cookies/session-jwt",
+          "/access/http/response/headers/Authorization",
+          "/access/http/response/headers/X-OpenIDM-Password"
+        ],
+        "includeIf" : [ ]
+      }
+    }
+  },
+  "eventHandlers" : [
+    {
+      "class" : "org.forgerock.audit.handlers.json.JsonAuditEventHandler",
+      "config" : {
+        "name" : "json",
+        "logDirectory" : "&{launcher.working.location}/audit",
+        "buffering" : {
+          "maxSize" : 100000,
+          "writeInterval" : "100 millis"
+        },
+        "topics" : [
+          "access",
+          "activity",
+          "recon",
+          "sync",
+          "authentication",
+          "config"
+        ]
+      }
+    },
+    {
+      "class" : "org.forgerock.openidm.audit.impl.RepositoryAuditEventHandler",
+      "config" : {
+        "name" : "repo",
+        "topics" : [
+          "access",
+          "activity",
+          "recon",
+          "sync",
+          "authentication",
+          "config"
+        ]
+      }
+    }
+  ],
+  "eventTopics" : {
+    "config" : {
+      "filter" : {
+        "actions" : [
+          "create",
+          "update",
+          "delete",
+          "patch",
+          "action"
+        ]
+      }
+    },
+    "activity" : {
+      "filter" : {
+        "actions" : [
+          "create",
+          "update",
+          "delete",
+          "patch",
+          "action"
+        ]
+      },
+      "watchedFields" : [ ],
+      "passwordFields" : [
+        "password"
+      ]
+    }
+  },
+  "exceptionFormatter" : {
+    "type" : "text/javascript",
+    "file" : "bin/defaults/script/audit/stacktraceFormatter.js"
+  }
+}
+----
+
+With the preceding configuration audit event logs will be stored in the Wren:IDM database and also in the JSON files (located in `audit` directory).
