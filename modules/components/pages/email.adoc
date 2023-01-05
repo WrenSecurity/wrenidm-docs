@@ -78,7 +78,7 @@ openidm.action('external/email', 'send', params);
 You can send email notification using REST API by sending a HTTP POST request to the `/openidm/external/email` resource.
 In the following example a testing email is sent to `recipient@wrensecurity.org`:
 
-[source,bash]
+[,console]
 ----
 curl \
   -H "Content-Type: application/json" \

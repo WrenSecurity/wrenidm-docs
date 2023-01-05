@@ -1,0 +1,11 @@
+{
+  "name": "wrenidm-docs",
+  "private": true,
+  "scripts": {
+    "build": "antora --clean local-antora-playbook.yml"
+  },
+  "devDependencies": {
+      "@antora/cli": "3.1.2",
+      "@antora/site-generator": "3.1.2"
+  }
+}
