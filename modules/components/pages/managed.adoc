@@ -1,3 +1,331 @@
 = Managed Objects
 
-NOTE: TBD: Schema definition, virtual properties, relationships, description of lifecycle.
+_Managed objects_ represent actual resources that are being managed and synchronized by Wren:IDM.
+Managed objects provide a flexible JSON-based data model with parametric relationships and support for hook scripts that can be attached to various lifecycle events.
+
+In it's default configuration Wren:IDM defines _user_, _role_ and _assignment_ as core managed objects.
+You can define your own managed objects (e.g. objects for organizational structure) or modify the predefined ones (e.g. add / remove properties).
+
+Schema and behavior of managed objects is defined in the project file `conf/managed.json` (the default file is located on the Wren:IDM GitHub https://github.com/WrenSecurity/wrenidm/blob/main/openidm-zip/src/main/resources/conf/managed.json[repository^].
+The following chapters describe the details of the schema definition, as well as the lifecycle of managed objects and how to create relationships between managed objects.
+
+
+== Schema Definition
+
+Managed object schema and behavior is defined inside `conf/managed.json` project file.
+This configuration is not strictly validated and can hold additional metadata.
+
+NOTE: Not all schema properties are equal.
+Some of them define the object itself, others are used only by Admin UI and are completely irrelevant in IdM processes.
+
+.Example of managed object definition for organizational unit
+[source,json]
+----
+{
+  "name" : "ou",
+  "schema" : {
+    "id" : "http://jsonschema.net",
+    "$schema" : "http://json-schema.org/draft-03/schema",
+    "title" : "Organizational Unit",
+    "viewable" : true,
+    "order" : [
+      "_id",
+      "name"
+    ],
+    "properties" : {
+      "_id" : {
+        "title" : "ID",
+        "description" : "Technical identifier of the organizational unit.",
+        "type" : "string",
+        "viewable" : false,
+        "searchable" : false,
+        "userEditable" : false
+      },
+      "name" : {
+        "title" : "Name",
+        "description" : "Name of the organizational unit.",
+        "type" : "string",
+        "viewable" : true,
+        "searchable" : true,
+        "userEditable" : true
+      },
+      // ... other properties
+    },
+    "type" : "object",
+    "required" : [
+      "name"
+    ]
+  }
+}
+----
+
+Managed object is defined using following attributes:
+
+* `name` – name of the managed object
+* `schema`– managed object's schema definition
+** `title` – title of the managed object in the Admin UI
+** `viewable` – flag indicating whether managed object should be displayed in the Admin UI
+** `order` – order of properties on the Admin UI detail page
+** `properties` – definition of managed object properties (see chapter <<managed-properties>>)
+** `type` – type of the managed object (only `object` type supported at this moment)
+** `requried` – list of mandatory properties
+
+
+[[managed-properties]]
+=== Properties
+
+Each managed object is composed of a set of properties.
+These properties can be added / removed as needed.
+
+.Example of a property definition for the name of an organizational unit:
+[source,json]
+----
+{
+  "title" : "Name",
+  "description" : "Name of the organizational unit.",
+  "type" : "string",
+  "viewable" : true,
+  "searchable" : true,
+  "userEditable" : true,
+  "policies" : [],
+  "isVirtual" : false,
+  "minLength" : 3
+}
+----
+
+Managed object property is defined using following attributes (optional attributes can be omitted in the definition):
+
+* `title` – name to be used in Admin UI
+* `description` – brief description to be used in Admin UI
+* `type` – property value data type
+** supported data types are `string`, `object`, `array`, `number`, `integer`, `boolean` and `null`
+** value can be defined as plain string or array of values
+** if the property is not mandatory you must include data type `null` among the other types
+** value examples:
+*** `"string"` – required string value
+*** `["string", "null"]` – optional string value
+* `viewable` – flag indicating whether property will be visible on the object's detail page in Admin UI
+** allowed values: `true` (default) or `false`
+* `searchable` – flag indicating whether property can be searched in Admin UI
+** searchable property is displayed in the list of managed object items in Admin UI
+** allowed values: `true` or `false` (default)
+* `userEditable` – flag indicating whether user can edit property value in Admin UI
+** allowed values: `true` or `false` (default)
+* `policies` – validation rules to be applied to the property
+** see chapter _Policies_ for more information
+* `isVirtual` – flag indicating whether property value is dynamically calculated by a script
+** see chapter <<managed-virtual_properties>> for more information
+** allowed values: `true` or `false` (default)
+* `minLength` – minimum length used by _minLength_ policy validation
+** default value: unlimited length
+
+
+[[managed-virtual_properties]]
+==== Virtual Properties
+
+Virtual property is a special type of property whose value is calculated based on a script.
+Value is recalculated each time the managed object is retrieved from the repository.
+The value can be persisted in the repository to allow comparison of old and new values and to trigger synchronization events.
+
+.Example of virtual property definition for user status
+[source,json]
+----
+{
+  "title" : "End Date",
+  "description" : "Date of the user's departure.",
+  // ...
+},
+{
+  "title" : "Effective Status",
+  "description" : "Status of the user (ACTIVE or GONE).",
+  "viewable" : false,
+  "type" : "string",
+  "returnByDefault" : true,
+  "isVirtual" : true,
+  "onRetrieve" : {
+    "type" : "text/javascript",
+    "source" : "!object.endDate || new Date(object.endDate) >= new Date() ? 'ACTIVE' : 'GONE';"
+  }
+}
+----
+
+
+== Predefined Objects
+
+The following objects are predefined and used in Wren:IDM:
+
+* `User` – managed object representing a user identity and its properties
+* `Role` – managed object representing _provisioning_ or _authorization_ role
+** `Authorization Role` – grants privileges within IdM
+** `Provisioning Role` – define how objects are provisioned in target systems
+* `Assignment` – composable provisioning rule
+
+The following properties are used as the basis for _role-based access control_:
+
+* `Role Grants` – relationship between users and roles (they can be either manual or conditional)
+* `Effective Roles` – indicate which roles a user ends up with after applying additional logic (by default, the effective role of a user matches his _Role Grants_)
+* `Effective Assignments` – indicate which assignments a user ends up with after applying additional logic, similar in concept to _Effective Roles_
+
+NOTE: There is nothing inherently special about the pre-defined types.
+In a new installation, these types have some behavior that controls how provisioning is done, but this behavior is defined in the same way that you define behavior for any custom type.
+
+
+== Script Hooks
+
+Script hooks provide extension points that allow invoking some logic on a managed object during various lifecycle events.
+
+.Available script hooks
+[cols="1,3,3"]
+|===
+|Script Hook |When Executed |Global Variables
+
+|onCreate
+|Managed object is being created
+a|
+
+`object` – managed object to be created
+
+|onUpdate
+|Managed object is being updated
+a|
+
+`oldObject` – managed object's old state +
+`newObject` – managed object's new state
+
+|onDelete
+|Managed object is being deleted
+a|
+
+`object` – managed object to be deleted
+
+|onStore
+|Managed object is being stored in the repository
+a|
+
+`object` – managed object to be stored to the repository
+
+|postCreate
+|Managed object has been created (before implicit synchronization is performed)
+a|
+
+`object` – created managed object
+
+|postUpdate
+|Managed object has been updated (before implicit synchronization is performed)
+a|
+
+`oldObject` – managed object's old state +
+`newObject` – managed object's new state
+
+|postDelete
+|Managed object has been deleted (before implicit synchronization is performed)
+a|
+
+`oldObject` – deleted managed object
+
+|onSync
+|Implicit synchronization of managed object has finished
+a|
+
+`syncResults` – object with synchronization results +
+`oldObject` – managed object's old state +
+`newObject` – managed object's new state
+
+|onRetrieve
+|Managed object has been retrieved from the repository
+a|
+
+`object` – retrieved managed object
+
+|onValidate
+|Managed object's property validation is performed
+a|
+
+`object` – managed object to be validated
+
+|===
+
+The following global properties are available to all script hooks:
+
+* `request` – request object (e.g. request query parameters)
+* `resourceName` – resource name of the managed object (e.g. `managed/user`)
+* `context` – execution context (e.g. https://github.com/WrenSecurity/wrensec-commons/blob/ba626e8422f65a55fb5ab9d38cf0365890d484e0/rest/json-resource-http/src/main/java/org/forgerock/json/resource/http/HttpContext.java[HttpContext^])
+
+.Example of `onCreate` script hook
+[source,json]
+----
+{
+  "name" : "user",
+  "onCreate" : {
+    "type" : "text/javascript",
+    "source" : "object.mail = object.givenName + '.' + object.sn + '@example.org'"
+  },
+  // ...
+}
+----
+
+
+== Relationships
+
+Managed objects can have relationships that connect one managed object to another.
+Relationship cardinality can be _1:1_, _1:N_ or _M:N_.
+
+NOTE: By default, each assignment of a role to a user is represented by a relationship entry.
+
+.Example of `manager` relationship property configuration:
+[source,json]
+----
+"manager" : {
+  "type" : "relationship",
+  "reverseRelationship" : true,
+  "reversePropertyName" : "reports",
+  "validate" : true,
+  // ...
+  "properties" : {
+    "_ref" : {
+      "type" : "string"
+    },
+    "_refProperties" : {
+      "type" : "object",
+      "properties" : {
+        "_id" : {
+          "type" : "string"
+        }
+      }
+    }
+  },
+  "resourceCollection" : [
+    {
+      "path" : "managed/user",
+      "label" : "User",
+      "query" : {
+        "queryFilter" : "true",
+        "fields" : [
+          "userName",
+          "givenName",
+          "sn"
+        ],
+        "sortKeys" : [
+          "userName"
+        ]
+      }
+    }
+  ],
+  "userEditable" : false
+}
+----
+
+As shown in the example above, the `manager` property allows you to create relationships between two managed users – an employee and his manager.
+
+Relationship property is defined using the following attributes:
+
+* `type` – type of relationship field
+** value `relationship` indicates _1:*_ relations
+** value `array` indicates _M:*_ relations
+* `reverseRelationship` – flag indicating whether the relationship is bi-directional
+* `reversePropertyName` – name of the reverse property for bi-directional relationships
+* `validate` – flag indicating whether creation of relationship should be validated (i.e. checked whether referenced objects exist)
+* `properties`
+** `_ref` – type of managed object relationship reference
+** `_refProperties` – properties to be part of relationship definition, you can add custom attribues (e.g. `note` or `startDate`)
+* `resourceCollection` – describes managed objects and its properties to be listed in the reversed relationship property
