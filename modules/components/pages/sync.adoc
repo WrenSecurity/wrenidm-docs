@@ -1,3 +1,225 @@
 = Synchronization
 
-NOTE: TBD: Mapping, synchonization situations and actions, types of synchronization (live-sync, reconciliation), lifecycle of mapped objects, links
+NOTE: TBD: Synchronization situations and actions, types of synchronization (live-sync, reconciliation), lifecycle of mapped objects, links
+
+
+== Mapping
+
+_Mapping_ specifies how data is transformed and propagated between different data sources, such as databases, directories or applications.
+These mappings determine how attributes in one system are mapped to corresponding attributes in another system during synchronization.
+
+Mapping behaviour is defined inside `conf/sync.json`.
+
+.Example of mappings defined inside sync.json file
+[source,json]
+----
+{
+    "mappings": [
+      "=include ../sync/mappingEmployee.json"
+      "=include ../sync/mappingOu.json"
+      // ...
+    ]
+}
+----
+
+Under *mappings* attribute each mapping process is divided into separate files.
+Each _mapping_ file precisely describes not only how attributes in one system are mapped to corresponding attributes in another system, but also includes data transformation and lifecycle events.
+
+.Example of mapping from Employee database to Employee managed object inside Wren:IDM
+[source,json]
+----
+{
+    "name" : "mappingEmployee",
+    "source" : "system/database/employee",
+    "target" : "managed/employee",
+    "validSource" : {
+        "type" : "text/javascript",
+        "file" : "sync/hr/mappingEmployee_validSource.js"
+    },
+    "correlationScript" : {
+        "type" : "text/javascript",
+        "file" : "sync/hr/mappingEmployee_correlationScript.js"
+    },
+    "onUpdate" : {
+        "type" : "text/javascript",
+        "file" : "sync/hr/mappingEmployee_onUpdate.js"
+    },
+    "properties" : [
+        {
+            "source" : "EMPLOYEEID",
+            "target" : "id"
+        },
+        {
+            "source" : "ISMANAGER",
+            "transform" : {
+                "type" : "text/javascript",
+                "source" : "source === 'YES' ? 'true' : 'false'"
+            },
+            "target" : "isManager"
+        },
+        {
+            "source" : "MAIL",
+            "target" : "mail"
+        }
+    ],
+    "policies" : [
+        {
+            "situation" : "SOURCE_MISSING",
+            "action" : "UNLINK"
+        },
+        {
+            "situation" : "UNQUALIFIED",
+            "action" : "EXCEPTION"
+        }
+    ]
+}
+----
+
+
+=== Mapping is defined using following attributes:
+
+* `name` - name of the mapping (Will be displayed in Admin UI)
+* `source` - define source resource object
+** External resources can be defined by using `system/name/objectType-name`.
+`name` is defined in the connector configuration under _/conf/provisioner-*.json_.
+`objectType-name` is defined in the same connector configuration under corresponding _objectType_
+* `target` - define target resource object
+* `properties` - define source/target links between mapped attributes
+** `source` - attribute taken from source resource
+** `target` - target object's attribute
+** `condition` - under what condition this particular mapping is performed
+** `transform` - set of conditions and rules that take the incoming attribute and transform it
+*** `type` - type of the transform script (_text/javascript_, _groovy_,..)
+*** `source` - set of rules and conditions for transformation
+* `policies` - set of policies that describe situation/action pairs
+** `situation` - type of situation that occurs (See <<situations-table>>)
+** `action` - when a situation occurs, what is the reaction (See <<actions-list>>)
+* `correlationScript` - correlation script usually consists of more complex correlation queries that can be conditioned by one or more validating rules inside of the script.
+The script must return the result of the correlation query.
+** `type` - type of the correlationScript (_text/javascript_, _groovy_,..)
+** `file` - path to the correlationScript
+
+
+=== Validate synchronized objects:
+
+* `validSource` - script consisting of rules that need to be succesfully completed before mapping is started
+** `type` - type of the validSource script (_text/javascript_, _groovy_,..)
+** `source`/`file` - set of rules and conditions for validation that can be separated into a file (In case of separated _file_, a path to the validSource script must be included)
+* `validTarget` - script used during reconciliation to determine whether a target should be updated or ignored
+** `type` - type of the validTarget script (_text/javascript_, _groovy_,..)
+** `source`/`file` - set of rules and conditions for validation that can be separated into a file (In case of separated _file_, a path to the validTarget script must be included)
+
+
+=== Manipulate attributes with script hooks
+
+Script hooks provide extension points that allow invoking some logic on a managed object during various lifecycle events.
+All script files need to be included within the mapping file and must include the keyword for the lifecycle event and the following attributes:
+
+* `type` - type of the script file (_text/javascript_, _groovy_,..)
+* `file` - path to the script file
+
+IMPORTANT: All the available script hooks can be found in this table under Managed objects:
+xref:managed.adoc#script-hooks[Table of available script hooks]
+
+The following global properties are available to all script hooks:
+
+* `request` – request object (e.g. request query parameters)
+* `resourceName` – resource name of the managed object (e.g. `managed/user`)
+* `context` – execution context (e.g. https://github.com/WrenSecurity/wrensec-commons/blob/ba626e8422f65a55fb5ab9d38cf0365890d484e0/rest/json-resource-http/src/main/java/org/forgerock/json/resource/http/HttpContext.java[HttpContext^])
+
+.Example of `onUpdate` script hook
+[source,json]
+----
+{
+  "name" : "mappingEmployee",
+  "source" : "system/database/employee",
+  "target" : "managed/employee",
+  "onUpdate" : {
+    "type" : "text/javascript",
+    "file" : "mappingEmployee_onUpdate.js"
+  }
+}
+----
+
+
+=== Manage attributes with policy situations and actions
+
+Policy situations and actions can be used while describing the outcome of a situation that occurs during synchronization.
+When the synchronization situation occurs IDM performs the corresponding action.
+All of the situations are detected during source object changes and reconciliation.
+
+[[situations-table]]
+.Table of situations
+[cols="1,3,3"]
+|===
+|Situation |When executed |Default action
+
+|CONFIRMED
+|Source qualifies, Link exists, Single target object found
+|`UPDATE`
+
+|FOUND
+|Source qualifies, No link exists, Single target object found
+|`UPDATE`
+
+|FOUND_ALREADY_LINKED
+|Source qualifies, No link exists, Single target object found but it is already linked to another source
+|`EXCEPTION`
+
+|ABSENT
+|Source qualifies, No link exists, No target object found
+|`CREATE`
+
+|AMBIGUOUS
+|Source qualifies, No link exists, More than one target object found
+|`EXCEPTION`
+
+|MISSING
+|Source qualifies, Link exists, No target object found
+|`EXCEPTION`
+
+|UNQUALIFIED
+|Source does not qualify, Either link exists and/or single or more matching target objects found
+|`DELETE`
+
+|SOURCE_IGNORED
+|Source does not qualify, No link exists or no object found
+|`REPORT`
+
+|TARGET_IGNORED
+|Source does not qualify
+|`REPORT`
+
+|UNASSIGNED
+|Target object found for which there is no link.
+|`EXCEPTION`
+
+|SOURCE_MISSING
+|Source does not qualify, No link exists, Single Target object found
+|`EXCEPTION`
+
+|LINK_ONLY
+|Source does not qualify, Link exists, No target object found
+|`EXCEPTION`
+
+|ALL_GONE
+|No source, No link exists, No target object found
+|`NOREPORT`
+
+|===
+
+Each action is executed directly by IDM.
+Here is a list including all performed actions with a description:
+
+[[actions-list]]
+.List of actions
+* `CREATE` - create and link target object
+* `UPDATE` - link and update target object
+* `DELETE` - unlink and delete target object
+* `LINK` - link source object
+* `UNLINK` - unlink target object
+* `EXCEPTION` - _situation_ marked as _exception_
+* `REPORT` - report _action_, execute _postAction_
+* `NOREPORT` - only execute _postAction_
+* `ASYNC` - no _action_, nor _postAction_
+* `IGNORE` - ignores all further _situations/actions_

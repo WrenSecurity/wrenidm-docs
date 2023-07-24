@@ -170,6 +170,7 @@ NOTE: There is nothing inherently special about the pre-defined types.
 In a new installation, these types have some behavior that controls how provisioning is done, but this behavior is defined in the same way that you define behavior for any custom type.
 
 
+[[script-hooks]]
 == Script Hooks
 
 Script hooks provide extension points that allow invoking some logic on a managed object during various lifecycle events.
