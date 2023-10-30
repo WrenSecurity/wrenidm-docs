@@ -1,3 +1,544 @@
 = Synchronization
 
-NOTE: TBD: Mapping, synchonization situations and actions, types of synchronization (live-sync, reconciliation), lifecycle of mapped objects, links
+_Synchronization_ Service is responsible for synchronizing data between resources.
+Synchronization between two resources is defined by mapping in the project file `conf/sync.json`.
+Each mapping defines the transformation of a source object into a target object, as well as connected lifecycle rules.
+The following chapters describe the details of the mapping definition and connected lifecycle policies.
+
+
+== Types of synchronization
+
+There are several types of synchronization.
+Changes from the external source system are synchronized using _reconciliation_ or _live-sync_.
+Changes in the Wren:IdM repository are propagated to the external target systems using _implicit synchonization_.
+
+
+=== Reconciliation
+
+Reconciliation is a synchronization process that ensures that the data in the target system (e.g. accounts) matches the data in the source system.
+Reconciliation is always performed for a specific mapping, i.e. between a source and target system.
+
+During reconciliation, the IdM iterates over the entire dataset of the source and target systems to calculate the changes that need to be propagated to the target system.
+This can take a long time if there are many objects in the external system or if the read / update operation in the external system is slow.
+
+Reconciliation is a fundamental process for compliance enforcement because it can detect invalid data states in the target system (e.g. orphan accounts).
+
+
+=== Live-sync
+
+Live-sync is a synchronization process that synchronizes data changes from the external source system to the IdM.
+Unlike reconciliation, live-sync synchronizes only changes that have been made since the last synchronization.
+These changes are detected by a system-specific mechanism:
+
+* retrieve changes based on the modification timestamp
+* retrieve changes based on the sequence number
+* any other supported mechanism
+
+This type of synchronization is used to quickly propagate data changes from the external source system to the IdM.
+
+
+=== Implicit synchronization
+
+Implicit synchronization is synchronization process that automatically propagates changes from the IdM repository to the target systems.
+Synchronization is performed for all relevant mappings (based on the object type) that are enabled.
+
+
+== Synchronization mapping
+
+Mapping defines the transformation from source object to target object, including the definition of a synchronized object lifecycle.
+There are two types of objects:
+
+* `managed objects` – objects maintained in Wren:IDM repository (e.g. managed user representing user identity)
+* `system objects` – objects maintained in external systems (e.g. account in external LDAP)
+
+Both can be either source or target objects.
+Managed user will be the source object when creating accounts the in target system (e.g. LDAP).
+Managed user will be the target object when synchronizing users from the source personal system.
+
+Mappings are defined inside `conf/sync.json` project file.
+
+.Example of mapping definitions in sync.json
+[source,json]
+----
+{
+  "mappings" : [
+    {
+      // First mapping
+    },
+    {
+      // Second mapping
+    },
+    // ...
+  ]
+}
+----
+
+Each mapping consists of the identification of the source and target resources, validation and correlation rules, mapping properties and handling of synchronization situations.
+
+.Example of employee mapping between HR system (CSV file) and Wren:IDM
+[source,json]
+----
+{
+  "name" : "csvEmployee_managedUser",
+  "source" : "system/csv/employee",
+  "target" : "managed/user",
+  "validSource" : {
+    "type" : "text/javascript",
+    "source" : "!!source.uid && !!source.firstName && !!source.lastName"
+  },
+  "correlationQuery" : {
+    "type" : "text/javascript",
+    "source" : "var query = { _queryFilter: '_id eq \"' + source.uid + '\"' }; query"
+  },
+  "onCreate" : {
+    "type" : "text/javascript",
+    "source" : "target.userName = source.lastName.toLowerCase() + source.uid;"
+  },
+  "properties": [
+    {
+      "source": "uid",
+      "target": "_id"
+    },
+    {
+      "source": "firstName",
+      "target": "givenName"
+    },
+    {
+      "source": "lastName",
+      "target": "sn"
+    },
+    {
+      "source" : "",
+      "transform" : {
+          "type" : "text/javascript",
+          "source" : "source.firstName.toLowerCase() + '.' + source.lastName.toLowerCase() + '@wrensecurity.org';"
+      },
+      "target" : "mail"
+    },
+    {
+      "default": "FooBar123",
+      "target" : "password"
+    }
+  ],
+  "policies" : [
+    {
+      "situation" : "ABSENT",
+      "action" : "CREATE"
+    },
+    {
+      "situation" : "CONFIRMED",
+      "action" : "UPDATE"
+    },
+    {
+      "situation" : "UNQUALIFIED",
+      "action" : "DELETE"
+    }
+  ]
+}
+----
+
+The previous example shows the mapping between HR system (represented by a CSV file) and Wren:IDM (managed object representing user).
+The mapping source is the employee record in the source CSV file, the mapping target is the managed user in the IdM.
+
+Mapping is defined by the following attributes:
+
+* `name` – name of the mapping
+* `source`– mapping source (`managed` or `system` resource)
+* `target`– mapping target (`managed` or `system` resource)
+* `enableSync`– flag indicating whether implicit synchonization is enabled
+* `sourceCondition` – script to filter the source dataset to be mapped
+* `validSource` – script that determines whether the source object is a valid to be mapped
+* `validTarget` – script that determines whether the target object is a valid to be mapped
+* `correlationScript` – script to perform correlation between source and target objects
+* `{synchronization script hooks}` – see <<sync-sync_script_hooks>>
+* `{target object script hooks}` – see <<sync-target_object_script_hooks>>
+* `properties`– objects that describe the mapping of attributes between source and target objects (see <<sync-mapping_properties>>)
+* `policies`– definition of actions for synchronization situations (see <<sync-mapping_policies>>)
+
+[[sync-mapping_properties]]
+=== Properties
+
+Each property object defines how the value of a target attribute is determined.
+There are a number of ways how to map the target attribute value.
+The value can simply be taken directly from the source attribute, or it can be calculated using non-trivial transformation logic.
+
+.Example of properties in mapping
+[source,json]
+----
+{
+...
+  "properties": [
+    {
+      "source": "lastName",
+      "target": "sn"
+    },
+    {
+      "source" : "",
+      "transform" : {
+          "type" : "text/javascript",
+          "source" : "source.lastName.toLowerCase() + '@wrensecurity.org';"
+      },
+      "target" : "mail"
+    },
+    {
+      "default": "FooBar123",
+      "target" : "password"
+    }
+  ],
+...
+}
+----
+
+Property object is defined by the following attributes:
+
+* `source` – source attribute to get value (can be empty, then the value is calculated using the transform script or the default value)
+* `target`– target attribute to map value
+* `transform`– script to calculate the target attribute value (global property `source` can be used to retrieve source object properties)
+* `default`– default value to be used when no value is calculated from the `source` or `transform`
+* `condition`– script that determines whether or not to map the target attribute
+
+
+[[sync-mapping_policies]]
+=== Policies
+
+Each policy object defines actions to be performed for specific synchronization situations.
+Each synchronization situation has a default action associated with it (see <<sync-situations_and_actions>>).
+
+.Example of policies in mapping
+[source,json]
+----
+{
+...
+  "policies" : [
+    {
+      "situation" : "ABSENT",
+      "action" : "CREATE",
+      "postAction": {
+        "type" : "text/javascript",
+        "source" : "// Send email notification ..."
+      }
+    },
+    {
+      "situation" : "UNQUALIFIED",
+      "action" : "DELETE"
+    }
+  ]
+...
+}
+----
+
+Property object is defined by the following attributes:
+
+* `situation` – synchronization situation to associate action
+* `action` – action to be performed for the specified synchronization situation
+* `postAction` – script to be executed after the action is completed
+
+
+[[sync-situations_and_actions]]
+== Synchonization situations and actions
+
+There are several situations that can occur during synchronization.
+Synchronization situation is determined using the following procedure:
+
+. Is source object valid?
++
+The source object is valid if it satisfies the valid source requirements.
+Source objects that have been filtered out by the `validSource` or `sourceCondition` scripts are invalid.
+. Is source object linked?
++
+Check if there is a link in the IdM for the source object.
+. Is there a valid target object?
++
+Use correlation logic to check whether the valid target object exists for the source object.
+
+.Synchronization situations
+[cols="2,1,1,1,1"]
+|===
+|Situation |Source valid? |Link? |Target object? |Default action
+
+|ABSENT
+|yes
+|no
+|no
+|CREATE
+
+|ALL_GONE
+|no
+|no
+|no
+|NOREPORT
+
+|AMBIGUOUS
+|yes
+|no
+|yes (>1)
+|EXCEPTION
+
+|CONFIRMED
+|yes
+|yes
+|yes
+|UPDATE
+
+|FOUND_ALREADY_LINKED
+|yes
+|nofootnote:[A link exists from another source object]
+|yes
+|EXCEPTION
+
+|FOUND
+|yes
+|no
+|yes
+|UPDATE
+
+|LINK_ONLY
+|no
+|yes
+|no
+|EXCEPTION
+
+|MISSING
+|yes
+|yes
+|no
+|EXCEPTION
+
+|SOURCE_IGNORED
+|no
+|no
+|no
+|REPORT
+
+|SOURCE_MISSING
+|no
+|yes
+|yes
+|EXCEPTION
+
+|TARGET_IGNORED
+|no
+|yes/no
+|nofootnote:[A target object exists but it is not valid]
+|REPORT
+
+|UNASSIGNED
+|?
+|no
+|yes
+|EXCEPTION
+
+|UNQUALIFIED
+|no
+|yes/no
+|yes
+|DELETE
+
+|===
+
+The following situations can only be detected during reconciliation:
+
+* `SOURCE_MISSING`
+* `TARGET_IGNORED`
+* `UNASSIGNED`
+
+The following situations can only be detected during source object changes (delete):
+
+* `ALL_GONE`
+* `LINK_ONLY`
+
+.Synchronization actions
+[cols="1,3"]
+|===
+|Action |Description
+
+|ASYNC
+|Indicates asynchronous process, ignore action or reporting
+
+|CREATE
+|Target object should be created and linked
+
+|DELETE
+|Target object should be deleted and unlinked
+
+|EXCEPTION
+|Throw an exception for the situation
+
+|IGNORE
+|Do not perform any action
+
+|LINK
+|Correlated target object should be linked
+
+|NOREPORT
+|Do not perform action, do not report the situation
+
+|REPORT
+|Do not perform action, report the situation
+
+|UNLINK
+|Linked target object should be unlinked
+
+|UPDATE
+|Target object should be linked and updated
+
+|===
+
+[[sync-sync_script_hooks]]
+== Synchronization script hooks
+
+Synchronization script hooks provide extension points that allow invoking some logic during various synchronization events.
+
+.Available script hooks
+[cols="1,3,3"]
+|===
+|Script Hook |When Executed |Global Variables
+
+|postMapping
+|Script to execute after implicit synchronization has been performed
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`targetId` – target object identifier +
+`situation` – synchronization situation for current synchronization operation
+
+|onRecon
+|Script to execute at the beginning of the reconciliation
+a|
+
+`mappingConfig` – object with mapping configuration
+
+|result
+|Script to execute for each mapping after successful reconciliation
+a|
+
+`source` – reconciliation source phase statistics +
+`target` – reconciliation target phase statistics +
+`global` – global reconciliation statistics
+
+|===
+
+The following global properties are available to all script hooks:
+
+* `context` – execution context (e.g. https://github.com/WrenSecurity/wrenidm/blob/2a4d5bd0639d48b3b7ad1883d0a8c7ea710647a0/openidm-core/src/main/java/org/forgerock/openidm/sync/ReconContext.java[ReconContext^])
+
+.Example of `onRecon` script hook
+[source,json]
+----
+{
+  "name" : "csvEmployee_managedUser",
+  // ...
+  "onRecon" : {
+    "type" : "text/javascript",
+    "source" : "logger.info('Reconciliation for mapping ' + mappingConfig.name + ' started...')"
+  },
+  // ...
+}
+----
+
+[[sync-target_object_script_hooks]]
+== Target object script hooks
+
+Target object script hooks provide extension points that allow invoking some logic during various lifecycle events.
+
+.Available script hooks
+[cols="1,3,3"]
+|===
+|Script Hook |When Executed |Global Variables
+
+|onCreate
+|Target object is being created
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`targetId` – target object identifier +
+`situation` – synchronization situation for current synchronization operation
+
+|onUpdate
+|Target object is being updated
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`oldTarget` – old target object before any mappings were applied +
+`targetId` – target object identifier +
+`situation` – synchronization situation for current synchronization operation
+
+|onDelete
+|Target object is being deleted
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`targetId` – target object identifier +
+`situation` – synchronization situation for current synchronization operation
+
+|onLink
+|Source object is being linked to the target object
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`targetId` – target object identifier +
+
+|onUnlink
+|Link between source and target objects is being removed
+a|
+
+`linkQualifier` – link qualifier for current mapping +
+`mappingConfig` – object with mapping configuration +
+`source` – source object +
+`sourceId` – source object identifier +
+`target` – target object +
+`targetId` – target object identifier +
+
+|===
+
+The following global properties are available to all script hooks:
+
+* `context` – execution context (e.g. https://github.com/WrenSecurity/wrenidm/blob/2a4d5bd0639d48b3b7ad1883d0a8c7ea710647a0/openidm-core/src/main/java/org/forgerock/openidm/sync/ReconContext.java[ReconContext^])
+
+.Example of `onCreate` script hook
+[source,json]
+----
+{
+  "name" : "csvEmployee_managedUser",
+  // ...
+  "onCreate" : {
+    "type" : "text/javascript",
+    "source" : "target.userName = source.lastName.toLowerCase() + source.uid;"
+  },
+  // ...
+}
+----
+
+
+== Links
+
+Link objects represent relationships between source objects and target objects (e.g. link between managed user in IdM and account in LDAP).
+The links are used to search for objects in the source / target system and enable the detection of non-standard synchronization situations (e.g. `MISSING` situation when linked target object has been deleted).
+Links are managed (created / updated / deleted) during the synchronization process and are stored in the IdM database table `links` with the following structure:
+
+* `_id` – unique identifier
+* `_rev` –  link object's revision
+* `linkType` – mapping name
+* `firstId` – identifier in the source system
+* `secondId` – identifier in the target system
+* `linkQualifier` – link qualifier used for the mapping (`default` if no qualifier is specified)
