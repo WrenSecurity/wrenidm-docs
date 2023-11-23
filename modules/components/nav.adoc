@@ -12,3 +12,4 @@
 ** xref:crypto.adoc[]
 ** xref:security.adoc[]
 ** xref:email.adoc[]
+** xref:selfservice.adoc[]

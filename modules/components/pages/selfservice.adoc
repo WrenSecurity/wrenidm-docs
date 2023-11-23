@@ -1,0 +1,706 @@
+= Self-service
+
+Wren:IDM provides a built-in service for registering and handling progression of self-service processes.
+
+Self-service process is an anonymous process consisting of stages that share a process state.
+As client progresses thrugh a process, its stages are executed in pre-defined order.
+Stages can access shared process state, i.e. read necessary data from it or update it with data that can be useful for following stages.
+Stages might also require additional input from the client before executing.
+
+Self-service processes are always stateless.
+The process context details (e.g. current stage, process state) are stored in a snapshot token that is included in the communication between Wren:IDM and the client.
+
+== Process Definition
+
+Self-service process is defined inside `conf/selfservice-<processName>.json` project file.
+The configuration requires following properties:
+
+* `stagesConfig` - array of stages configurations (see chapter <<stages-configuration>>)
+* `snapshotToken` - snapshot token configuration (see chapter <<token-configuration>>)
+* `storage` - type of storage for process state
+** allowed values: `"stateless"`
+
+.Example of simple password reset process definition
+[source,json]
+----
+{
+  "stageConfigs" : [
+    {
+      "name" : "userQuery",
+      "identityServiceUrl" : "managed/user",
+      "identityIdField" : "_id",
+      "identityEmailField" : "mail",
+      "identityUsernameField" : "userName",
+      "identityAccountStatusField" : "accountStatus",
+      "validQueryFields" : ["userName", "mail"]
+    },
+    {
+      "name" : "resetStage",
+      "identityServiceUrl" : "managed/user",
+      "identityPasswordField" : "password"
+    }
+  ],
+  "snapshotToken" : {
+    "type" : "jwt",
+    "jweAlgorithm" : "RSAES_PKCS1_V1_5",
+    "encryptionMethod" : "A128CBC_HS256",
+    "jwsAlgorithm" : "HS256",
+    "tokenExpiry" : 180
+  },
+  "storage" : "stateless"
+}
+----
+
+[[stages-configuration]]
+=== Stages Configuration
+
+Stages configurations vary from stage to stage.
+Configuration references of predefined stages can be found in chapter <<supported-stages>>.
+
+The only required property common for all stages configurations is one of the following:
+
+* `name` - stage name (e.g. `"resetStage"`)
+* `class` - stage configuration class name (e.g. `"org.forgerock.selfservice.stages.reset.ResetStageConfig"`)
+
+[[token-configuration]]
+=== Snapshot Token Configuration
+
+Self-service processes utilize JSON Web Token (JWT) for stateless storing of process context details.
+Configuration of `snapshotToken` property requires following properties:
+
+* `type` - token type
+** allowed values: `"jwt"`
+// Following properties are ignored by Wren:IDM, keeping them here if we want to move this chapter to wrensec-commons docs
+// * `sharedKey` - shared key
+// * `keyPairAlgorithm` - key pair generator algorithm
+// ** allowed values: `"DiffieHellman"`, `"DSA"`, `"RSA"` (see https://docs.oracle.com/javase/8/docs/api/java/security/KeyPairGenerator.html[KeyPairGenerator^] class in `java.security`)
+// * `keyPairSize` - key pair generator key size
+* `jweAlgorithm` - JWE algorithm
+** allowed values: see https://github.com/WrenSecurity/wrensec-commons/blob/main/json-web-token/src/main/java/org/forgerock/json/jose/jwe/JweAlgorithm.java[JweAlgorithm^] class in `wrensec-commons` GitHub repository.
+* `encryptionMethod` - encryption method
+** allowed values: see https://github.com/WrenSecurity/wrensec-commons/blob/main/json-web-token/src/main/java/org/forgerock/json/jose/jwe/EncryptionMethod.java[EncryptionMethod^] class in `wrensec-commons` GitHub repository.
+* `jwsAlgorithm` - JWS algorithm
+** allowed values: see https://github.com/WrenSecurity/wrensec-commons/blob/main/json-web-token/src/main/java/org/forgerock/json/jose/jws/JwsAlgorithm.java[JwsAlgorithm^] class in `wrensec-commons` GitHub repository.
+* `tokenExpiry` - token life time in seconds (optional)
+** if not provided, the token never expires
+
+[[supported-stages]]
+== Supported Stages
+
+Wren:IDM provides several predefined stages that can be used in self-service processes.
+
+=== Captcha Stage
+
+reCAPTCHA based security stage.
+
+Configuration:
+
+* `name`: `"captcha"`
+* `recaptchaSiteKey` - reCAPTCHA site key
+* `recaptchaSecretKey` - reCAPTCHA secret key
+* `recaptchaUri` - URI for verifying reCAPTCHA
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "captcha",
+  "recaptchaSiteKey" : "123",
+  "recaptchaSecretKey" : "abc",
+  "recaptchaUri" : "https://www.google.com/recaptcha/api/siteverify"
+}
+----
+
+=== Email Validation Stage
+
+Stage for verifying user's email address.
+The stage reads email address from process state and sends verification email to that address.
+Verification email message contains verification link that contains process token and a verification code that need to be submitted and verified in order to proceed to next stage.
+
+Configuration:
+
+* `name`: `"emailValidation"`
+* `emailServiceUrl` - URL of the email service that will be used to send verification email
+* `emailServiceParameters` - additional parameters for the email service
+* `subjectTranslations` - map of verification email subjects for different locales
+** expected format: `Map<locale, subject>`
+* `messageTranslations` - map of verification email messages for different locales
+** expected format: `Map<locale, message>`
+* `mimeType` - verification email message MIME type
+* `from` - verification email sender address
+* `verificationLinkToken` - string token representing where the verification URL should be substituted
+* `verificationLink` - verification URL to be passed into the verification email message
+* `identityEmailField` - field name for the identity email address
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "emailValidation",
+  "emailServiceUrl" : "external/email",
+  "emailServiceParameters" : {
+    "someflag" : "true"
+  },
+  "subjectTranslations" : {
+    "en" : "Email subject in EN",
+    "fr" : "Email subject in FR"
+  },
+  "messageTranslations" : {
+    "en" : "Email message with verification link %link% in EN",
+    "fr" : "Email message with verification link %link% in FR"
+  },
+  "mimeType" : "text/plain",
+  "from" : "noreply@example.com",
+  "verificationLinkToken" : "%link%",
+  "verificationLink" : "https://localhost:8080/#/emailVerification/",
+  "identityEmailField" : "mail"
+}
+----
+
+=== KBA Security Answer Definition Stage
+
+Stage responsible for supplying configured KBA questions to user and storing provided answers to process state.
+
+Configuration:
+
+* `name`: `"kbaSecurityAnswerDefinitionStage"`
+* `kbaConfig`
+** `questions` - predefined security questions for users to answer
+*** expected format: `Map<id, Map<locale, question>>`
+** `kbaPropertyName` - user property name where KBA details will be set
+* `numberOfAnswersUserMustSet` - number of answers that user must set
+
+NOTE: If `kbaConfig` is set to `null`, Self-service service will try to read the configuration from `conf/selfservice.kba.json` file.
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "kbaSecurityAnswerDefinitionStage",
+  "numberOfAnswersUserMustSet" : "1",
+  "kbaConfig" : {
+    "kbaPropertyName" : "kbaInfo",
+    "questions" : {
+      "1" : {
+        "en" : "Question 1 in EN",
+        "fr" : "Question 1 in FR"
+      },
+      "2" : {
+        "en" : "Question 2 in EN",
+        "fr" : "Question 2 in FR"
+      }
+    }
+  }
+}
+----
+
+=== KBA Security Answer Verification Stage
+
+Stage responsible for verifying user provided answers to KBA questions stored in process state.
+
+Configuration:
+
+* `name`: `"kbaSecurityAnswerVerificationStage"`
+* `kbaConfig`
+** `questions` - predefined security questions for users to answer
+*** expected format: `Map<id, Map<locale, question>>`
+** `kbaPropertyName` - user property name where KBA details were set
+* `numberOfQuestionsUserMustAnswer` - number of questions that user must answer
+* `identityServiceUrl` - identity service URL used to read the user object
+
+NOTE: If `kbaConfig` is set to `null`, Self-service service will try to read the configuration from `conf/selfservice.kba.json` file.
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "kbaSecurityAnswerVerificationStage",
+  "identityServiceUrl" : "managed/user",
+  "numberOfQuestionsUserMustAnswer" : "2",
+  "kbaConfig" : {
+    "kbaPropertyName" : "kbaInfo",
+    "questions" : {
+      "1" : {
+        "en" : "Question 1 in EN",
+        "fr" : "Question 1 in FR"
+      },
+      "2" : {
+        "en" : "Question 2 in EN",
+        "fr" : "Question 2 in FR"
+      }
+    }
+  }
+}
+----
+
+=== User Registration Stage
+
+Using configured identity service this stage creates new user with data stored in process context by previous stages.
+
+Configuration:
+
+* `name`: `"selfRegistration"`
+* `identityServiceUrl` - identity service URL used to create new user
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "selfRegistration",
+  "identityServiceUrl" : "managed/user"
+}
+----
+
+=== Password Reset Stage
+
+Using configured identity service this stage patches user object with new provided password.
+
+Configuration:
+
+* `name`: `"resetStage"`
+* `identityServiceUrl` - identity service URL used to patch the user
+* `identityPasswordField` - user property name where password should be stored
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "resetStage",
+  "identityServiceUrl" : "managed/user",
+  "identityPasswordField" : "password"
+}
+----
+
+=== Terms and Conditions Stage
+
+Stage presents configured Terms and Conditions text to the user for acceptance.
+
+Configuration:
+
+* `name`: `"termsAndConditions"`
+* `termsTranslations` - map of terms and conditions for different locales
+** expected format: `Map<locale, terms and conditions string>`
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "termsAndConditions",
+  "termsTranslations" : {
+    "en" : "Terms and conditions in EN",
+    "fr" : "Terms and conditions in FR",
+  }
+}
+----
+
+=== Email Based Username Retrieval Stage
+
+Stage for retrieving user's username via email.
+
+Configuration:
+
+* `name`: `"emailUsername"`
+* `emailServiceUrl` - URL of the email service that will be used to send verification email
+* `emailServiceParameters` - additional parameters for the email service
+* `subjectTranslations` - map of verification email subjects for different locales
+** expected format: `Map<locale, subject>`
+* `messageTranslations` - map of verification email messages for different locales
+** expected format: `Map<locale, message>`
+* `mimeType` - verification email message MIME type
+* `from` - verification email sender address
+* `usernameToken` - string token representing where the username should be substituted
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "emailUsername",
+  "emailServiceUrl" : "external/email",
+  "emailServiceParameters" : {
+    "someflag" : "true"
+  },
+  "subjectTranslations" : {
+    "en" : "Email subject in EN",
+    "fr" : "Email subject in FR"
+  },
+  "messageTranslations" : {
+    "en" : "Email message with username %username% in EN",
+    "fr" : "Email message with username %username% in FR"
+  },
+  "mimeType" : "text/plain",
+  "from" : "noreply@example.com",
+  "usernameToken" : "%username%"
+}
+----
+
+=== Retrieve Username Stage
+
+Stage for retrieving user's username that is stored to process context `successAdditions` property.
+
+Configuration:
+
+* `name`: `"retrieveUsername"`
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "retrieveUsername"
+}
+----
+
+=== User Details Stage
+
+Stage responsible for storing provided user data to process context.
+If process context already contains user email, it needs to match provided email.
+If no email is provided, user email from process context will also be added among other user data in process context.
+
+Configuration:
+
+* `name`: `"userDetails"`
+* `identityEmailField` - field name for the identity email address
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "userDetails",
+  "identityEmailField" : "mail"
+}
+----
+
+=== User Query Stage
+
+Stage is responsible for querying the configured identity service for a user based on the provided query fields.
+Once identified, it populates `mail` and `userId` fields in process context.
+
+Configuration:
+
+* `name`: `"userQuery"`
+* `validQueryFields` - list of query fields to be used when looking up the user
+* `identityServiceUrl` - identity service URL used to lookup the user
+* `identityIdField` - field name for the identity ID
+* `identityEmailField` - field name for the identity email address
+* `identityUsernameField` - field name for the identity username
+* `identityAccountStatusField` - field name for the identity account status
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "userQuery",
+  "validQueryFields" : ["userName", "mail"],
+  "identityServiceUrl" : "managed/user",
+  "identityIdField" : "_id",
+  "identityEmailField" : "mail",
+  "identityUsernameField" : "userName",
+  "identityAccountStatusField" : "accountStatus"
+}
+----
+
+=== Validate Active Account Stage
+
+Stage responsible for validating user account status before password reset.
+
+Configuration:
+
+* `name`: `"validateActiveAccount"`
+* `validStatusValue` - account status value that is considered valid
+// Following property is never used by the stage
+// * `accountStatusField` - field name for the identity status
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "validateActiveAccount",
+  "validStatusValue" : "active"
+}
+----
+
+=== Social User Details Stage
+
+Stage responsible for gathering social user profile details.
+It expects the `mail` field to be populated in process context which it uses to verify against the email address specified in the provided in user object.
+
+Configuration:
+
+* `name`: `"socialUserDetails"`
+* `identityEmailField` - field name for the identity email address
+* `providers` - list of identity provider configurations
+** `name` - unique provider name
+** `type` - authentication type (e.g., `OPENID_CONNECT`, `OAUTH`)
+** `icon` - icon HTML
+** `authorization_endpoint` - endpoint for authentication and authorization of a user
+** `token_endpoint` - endpoint for requesting access and ID tokens
+** `userinfo_endpoint` - endpoint for requesting user information
+** `well-known` - well-known endpoint for OpenID Connect configuration key-value pairs
+** `client_id` - OAuth client ID
+** `client_secret` - OAuth client secret
+** `scope` - OAuth scopes being requested
+*** expected value: `List<scope>`
+** `authenticationId` - property that maps to unique user identifier
+// Following property is never used by the stage
+// ** `schema` - JSON Schema for generating form fields
+** `propertyMap` - property mapping from provider fields to OpenIDM fields (optional)
+** `enabled` - enabled-state
+*** expected value: `true`/`false`
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "socialUserDetails",
+  "identityEmailField" : "mail",
+  "providers" : [
+    {
+      "name" : "google",
+      "type" : "OPENID_CONNECT",
+      "icon" : "google",
+      "authorization_endpoint" : "authorization_endpoint",
+      "token_endpoint" : "token_endpoint",
+      "userinfo_endpoint" : "userinfo_endpoint",
+      "well-known" : "",
+      "client_id" : "",
+      "client_secret" : "",
+      "scope" : [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "authenticationId" : "sub",
+      "enabled" : true
+    }
+  ]
+}
+----
+
+== Predefined Processes
+
+Wren:IDM comes with three predefined self-service processes:
+
+* User Registration
+* Password Reset
+* Forgotten Username
+
+Apart from standard JSON file configuration, these processes can also be configured directly in Admin UI.
+
+NOTE: Configuration file for every mentioned predefined process is created after the process is explicitly enabled in Admin UI.
+When a process is enabled or disabled in Admin UI, the option is stored to corresponding boolean property in `conf/ui-configuration.json` file.
+
+=== User Registration Process
+
+User registration process serves to collect user data and create new user object.
+
+Corresponding property in `conf/ui-configuration.json`: `selfRegistration`
+
+Configuration file: `conf/selfservice-registration.json`
+
+.Default configuration
+[source,json]
+----
+{
+  "stageConfigs" : [
+    {
+      "name" : "userDetails",
+      "identityEmailField" : "mail"
+    },
+    {
+      "name" : "emailValidation",
+      "identityEmailField" : "mail",
+      "emailServiceUrl" : "external/email",
+      "from" : "info@admin.org",
+      "subject" : "Register new account",
+      "mimeType" : "text/html",
+      "subjectTranslations" : {
+        "en" : "Register new account",
+        "fr" : "Créer un nouveau compte"
+      },
+      "messageTranslations" : {
+        "en" : "<h3>This is your registration email.</h3><h4><a href=\"%link%\">Email verification link</a></h4>",
+        "fr" : "<h3>Ceci est votre mail d'inscription.</h3><h4><a href=\"%link%\">Lien de vérification email</a></h4>"
+      },
+      "verificationLinkToken" : "%link%",
+      "verificationLink" : "https://localhost:8443/#register/"
+    },
+    {
+      "name" : "kbaSecurityAnswerDefinitionStage",
+      "numberOfAnswersUserMustSet" : 1,
+      "kbaConfig" : null
+    },
+    {
+      "name" : "selfRegistration",
+      "identityServiceUrl" : "managed/user"
+    }
+  ],
+  "snapshotToken" : {
+    "type" : "jwt",
+    "jweAlgorithm" : "RSAES_PKCS1_V1_5",
+    "encryptionMethod" : "A128CBC_HS256",
+    "jwsAlgorithm" : "HS256",
+    "tokenExpiry" : 1800
+  },
+  "storage" : "stateless"
+}
+----
+
+Stage `kbaSecurityAnswerDefinitionStage` uses default KBA configuration from `conf/selfservice.kba.json` file.
+
+.Default KBA configuration
+[source,json]
+----
+{
+  "kbaPropertyName" : "kbaInfo",
+  "questions" : {
+    "1" : {
+      "en" : "What's your favorite color?",
+      "en_GB" : "What's your favorite colour?",
+      "fr" : "Quelle est votre couleur préférée?"
+    },
+    "2" : {
+      "en" : "Who was your first employer?"
+    }
+  }
+}
+----
+
+=== Password Reset Process
+
+Password reset process allows users to reset their forgotten password from Enduser UI's Login page.
+
+Corresponding property in `conf/ui-configuration.json`: `passwordReset`
+
+Configuration file: `conf/selfservice-reset.json`
+
+.Default configuration
+[source,json]
+----
+{
+  "stageConfigs" : [
+    {
+      "name" : "userQuery",
+      "validQueryFields" : [
+        "userName",
+        "mail",
+        "givenName",
+        "sn"
+      ],
+      "identityIdField" : "_id",
+      "identityEmailField" : "mail",
+      "identityUsernameField" : "userName",
+      "identityServiceUrl" : "managed/user"
+    },
+    {
+      "name" : "emailValidation",
+      "identityEmailField" : "mail",
+      "emailServiceUrl" : "external/email",
+      "from" : "info@admin.org",
+      "subject" : "Reset password email",
+      "mimeType" : "text/html",
+      "subjectTranslations" : {
+        "en" : "Reset your password",
+        "fr" : "Réinitialisez votre mot de passe"
+      },
+      "messageTranslations" : {
+        "en" : "<h3>Click to reset your password</h3><h4><a href=\"%link%\">Password reset link</a></h4>",
+        "fr" : "<h3>Cliquez pour réinitialiser votre mot de passe</h3><h4><a href=\"%link%\">Mot de passe lien de réinitialisation</a></h4>"
+      },
+      "verificationLinkToken" : "%link%",
+      "verificationLink" : "https://localhost:8443/#passwordReset/"
+    },
+    {
+      "name" : "kbaSecurityAnswerVerificationStage",
+      "kbaPropertyName" : "kbaInfo",
+      "identityServiceUrl" : "managed/user",
+      "numberOfQuestionsUserMustAnswer" : "1",
+      "kbaConfig" : null
+    },
+    {
+      "name" : "resetStage",
+      "identityServiceUrl" : "managed/user",
+      "identityPasswordField" : "password"
+    }
+  ],
+  "snapshotToken" : {
+    "type" : "jwt",
+    "jweAlgorithm" : "RSAES_PKCS1_V1_5",
+    "encryptionMethod" : "A128CBC_HS256",
+    "jwsAlgorithm" : "HS256",
+    "tokenExpiry" : 1800
+  },
+  "storage" : "stateless"
+}
+----
+
+Stage `kbaSecurityAnswerVerificationStage` uses default KBA configuration from `conf/selfservice.kba.json` file.
+
+.Default KBA configuration
+[source,json]
+----
+{
+  "kbaPropertyName" : "kbaInfo",
+  "questions" : {
+    "1" : {
+      "en" : "What's your favorite color?",
+      "en_GB" : "What's your favorite colour?",
+      "fr" : "Quelle est votre couleur préférée?"
+    },
+    "2" : {
+      "en" : "Who was your first employer?"
+    }
+  }
+}
+----
+
+=== Forgotten Username Process
+
+Forgotton username process allows users to retrieve their forgotten username from Enduser UI's Login page.
+
+Corresponding property in `conf/ui-configuration.json`: `forgotUsername`
+
+Configuration file: `conf/selfservice-username.json`
+
+.Default configuration
+[source,json]
+----
+{
+  "stageConfigs" : [
+    {
+      "name" : "userQuery",
+      "validQueryFields" : [
+        "mail",
+        "givenName",
+        "sn"
+      ],
+      "identityIdField" : "_id",
+      "identityEmailField" : "mail",
+      "identityUsernameField" : "userName",
+      "identityServiceUrl" : "managed/user"
+    },
+    {
+      "name" : "emailUsername",
+      "emailServiceUrl" : "external/email",
+      "from" : "info@admin.org",
+      "mimeType" : "text/html",
+      "subjectTranslations" : {
+        "en" : "Account Information - username"
+      },
+      "messageTranslations" : {
+        "en" : "<h3>Username is:</h3><br />%username%"
+      },
+      "usernameToken" : "%username%"
+    },
+    {
+      "name" : "retrieveUsername"
+    }
+  ],
+  "snapshotToken" : {
+    "type" : "jwt",
+    "jweAlgorithm" : "RSAES_PKCS1_V1_5",
+    "encryptionMethod" : "A128CBC_HS256",
+    "jwsAlgorithm" : "HS256",
+    "tokenExpiry" : 1800
+  },
+  "storage" : "stateless"
+}
+----
