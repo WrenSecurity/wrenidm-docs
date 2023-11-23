@@ -1,8 +1,7 @@
 = Email Service
 
-Wren:IDM provides a built-in service to send email notifications.
+_Email Service_ provides a built-in service to send email notifications.
 The service uses external outbound SMTP mail server.
-Email notifications can be sent in two ways – by a script or through REST API.
 
 
 == Outbound Server Configuration
@@ -43,7 +42,7 @@ Example of configuration for Google SMTP server:
 
 == Sending Email
 
-Email notifications can be sent in two ways: by a script or through REST API.
+Email notifications can be sent in two ways – from a script or through REST API.
 Both options use the same notification properties:
 
 * `from` –⁠ sender email address

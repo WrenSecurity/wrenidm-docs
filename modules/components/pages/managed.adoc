@@ -6,7 +6,7 @@ Managed objects provide a flexible JSON-based data model with parametric relatio
 In it's default configuration Wren:IDM defines _user_, _role_ and _assignment_ as core managed objects.
 You can define your own managed objects (e.g. objects for organizational structure) or modify the predefined ones (e.g. add / remove properties).
 
-Schema and behavior of managed objects is defined in the project file `conf/managed.json` (the default file is located on the Wren:IDM GitHub https://github.com/WrenSecurity/wrenidm/blob/main/openidm-zip/src/main/resources/conf/managed.json[repository^].
+Schema and behavior of managed objects is defined in the project file `conf/managed.json` (the default file is located on the Wren:IDM GitHub https://github.com/WrenSecurity/wrenidm/blob/main/openidm-zip/src/main/resources/conf/managed.json[repository^]).
 The following chapters describe the details of the schema definition, as well as the lifecycle of managed objects and how to create relationships between managed objects.
 
 
@@ -62,7 +62,7 @@ Some of them define the object itself, others are used only by Admin UI and are 
 Managed object is defined using following attributes:
 
 * `name` – name of the managed object
-* `schema`– managed object's schema definition
+* `schema` – managed object's schema definition
 ** `title` – title of the managed object in the Admin UI
 ** `viewable` – flag indicating whether managed object should be displayed in the Admin UI
 ** `order` – order of properties on the Admin UI detail page
