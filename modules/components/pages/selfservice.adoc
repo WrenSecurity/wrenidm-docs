@@ -1,11 +1,10 @@
 = Self-service
 
-Wren:IDM provides a built-in service for registering and handling progression of self-service processes.
+Wren:IDM provides an integrated service for registering and managing the progress of self-service processes.
 
-Self-service process is an anonymous process consisting of stages that share a process state.
-As client progresses thrugh a process, its stages are executed in pre-defined order.
-Stages can access shared process state, i.e. read necessary data from it or update it with data that can be useful for following stages.
-Stages might also require additional input from the client before executing.
+A self-service process is an anonymous process consisting of stages that share a process state.
+As a client progresses through a process, its stages are executed in a predefined order. Stages can access the shared process state, i.e. read necessary data from it or update it with data that may be useful to subsequent stages.
+Stages may also require additional input from the client before execution.
 
 Self-service processes are always stateless.
 The process context details (e.g. current stage, process state) are stored in a snapshot token that is included in the communication between Wren:IDM and the client.
@@ -87,7 +86,7 @@ Configuration of `snapshotToken` property requires following properties:
 [[supported-stages]]
 == Supported Stages
 
-Wren:IDM provides several predefined stages that can be used in self-service processes.
+Wren:IDM provides a number of predefined stages that can be used in a self-service process.
 
 === Captcha Stage
 
@@ -113,9 +112,9 @@ Configuration:
 
 === Email Validation Stage
 
-Stage for verifying user's email address.
-The stage reads email address from process state and sends verification email to that address.
-Verification email message contains verification link that contains process token and a verification code that need to be submitted and verified in order to proceed to next stage.
+Stage for verifying the user's email address.
+The stage reads the email address from the process state and sends a verification email to that address.
+The verification email message contains a verification link that contains a process token and a verification code that must be submitted and verified to proceed to the next stage.
 
 Configuration:
 
@@ -159,7 +158,7 @@ Configuration:
 
 === KBA Security Answer Definition Stage
 
-Stage responsible for supplying configured KBA questions to user and storing provided answers to process state.
+Stage responsible for providing configured KBA questions to the user and storing provided answers to the process state.
 
 Configuration:
 
@@ -196,7 +195,7 @@ NOTE: If `kbaConfig` is set to `null`, Self-service service will try to read the
 
 === KBA Security Answer Verification Stage
 
-Stage responsible for verifying user provided answers to KBA questions stored in process state.
+Stage responsible for verifying user provided answers to KBA questions stored in the process state.
 
 Configuration:
 
@@ -235,7 +234,7 @@ NOTE: If `kbaConfig` is set to `null`, Self-service service will try to read the
 
 === User Registration Stage
 
-Using configured identity service this stage creates new user with data stored in process context by previous stages.
+Using the configured identity service, this stage creates a new user with data stored in the process context by previous stages.
 
 Configuration:
 
@@ -253,7 +252,7 @@ Configuration:
 
 === Password Reset Stage
 
-Using configured identity service this stage patches user object with new provided password.
+Using the configured identity service, this stage patches the user object with the new provided password.
 
 Configuration:
 
@@ -273,7 +272,7 @@ Configuration:
 
 === Terms and Conditions Stage
 
-Stage presents configured Terms and Conditions text to the user for acceptance.
+Stage presents the configured Terms and Conditions text to the user for acceptance.
 
 Configuration:
 
@@ -335,7 +334,7 @@ Configuration:
 
 === Retrieve Username Stage
 
-Stage for retrieving user's username that is stored to process context `successAdditions` property.
+Stage for retrieving the user's username that is stored to process context's `successAdditions` property.
 
 Configuration:
 
@@ -351,9 +350,9 @@ Configuration:
 
 === User Details Stage
 
-Stage responsible for storing provided user data to process context.
-If process context already contains user email, it needs to match provided email.
-If no email is provided, user email from process context will also be added among other user data in process context.
+Stage responsible for storing provided user data to the process context.
+If process context already contains user email, it must match the provided email.
+If no email is provided, the user email from the process context will also be added among other user data in the process context.
 
 Configuration:
 
@@ -400,7 +399,7 @@ Configuration:
 
 === Validate Active Account Stage
 
-Stage responsible for validating user account status before password reset.
+Stage responsible for validating user account status prior to password reset.
 
 Configuration:
 
@@ -420,8 +419,8 @@ Configuration:
 
 === Social User Details Stage
 
-Stage responsible for gathering social user profile details.
-It expects the `mail` field to be populated in process context which it uses to verify against the email address specified in the provided in user object.
+Stage responsible for collecting social user profile details.
+It expects the `mail` field to be populated in the process context, which it uses to verify against the email address specified in the provided in user object.
 
 Configuration:
 
@@ -442,7 +441,7 @@ Configuration:
 ** `authenticationId` - property that maps to unique user identifier
 // Following property is never used by the stage
 // ** `schema` - JSON Schema for generating form fields
-** `propertyMap` - property mapping from provider fields to OpenIDM fields (optional)
+** `propertyMap` - property mapping from provider fields to Wren:IDM fields (optional)
 ** `enabled` - enabled-state
 *** expected value: `true`/`false`
 
@@ -483,10 +482,10 @@ Wren:IDM comes with three predefined self-service processes:
 * Password Reset
 * Forgotten Username
 
-Apart from standard JSON file configuration, these processes can also be configured directly in Admin UI.
+In addition to the standard JSON file configuration, these processes can also be configured directly in the Admin UI.
 
-NOTE: Configuration file for every mentioned predefined process is created after the process is explicitly enabled in Admin UI.
-When a process is enabled or disabled in Admin UI, the option is stored to corresponding boolean property in `conf/ui-configuration.json` file.
+NOTE: The configuration file for each of the above predefined processes is created after the process is explicitly enabled in the Admin UI.
+When a process is enabled or disabled in Admin UI, the option is saved to the corresponding boolean property in `conf/ui-configuration.json` file.
 
 === User Registration Process
 
