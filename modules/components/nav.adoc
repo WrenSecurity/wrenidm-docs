@@ -9,6 +9,7 @@
 ** xref:workflow.adoc[]
 ** xref:audit.adoc[]
 ** xref:authentication.adoc[]
+** xref:selfservice.adoc[]
 ** xref:crypto.adoc[]
 ** xref:security.adoc[]
 ** xref:email.adoc[]
