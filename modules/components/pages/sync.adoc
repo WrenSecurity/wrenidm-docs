@@ -94,18 +94,18 @@ Each mapping consists of the identification of the source and target resources, 
     "type" : "text/javascript",
     "source" : "target.userName = source.lastName.toLowerCase() + source.uid;"
   },
-  "properties": [
+  "properties" : [
     {
-      "source": "uid",
-      "target": "_id"
+      "source" : "uid",
+      "target" : "_id"
     },
     {
-      "source": "firstName",
-      "target": "givenName"
+      "source" : "firstName",
+      "target" : "givenName"
     },
     {
-      "source": "lastName",
-      "target": "sn"
+      "source" : "lastName",
+      "target" : "sn"
     },
     {
       "source" : "",
@@ -116,7 +116,7 @@ Each mapping consists of the identification of the source and target resources, 
       "target" : "mail"
     },
     {
-      "default": "FooBar123",
+      "default" : "FooBar123",
       "target" : "password"
     }
   ],
@@ -167,10 +167,10 @@ The value can simply be taken directly from the source attribute, or it can be c
 ----
 {
 ...
-  "properties": [
+  "properties" : [
     {
-      "source": "lastName",
-      "target": "sn"
+      "source" : "lastName",
+      "target" : "sn"
     },
     {
       "source" : "",
@@ -181,7 +181,7 @@ The value can simply be taken directly from the source attribute, or it can be c
       "target" : "mail"
     },
     {
-      "default": "FooBar123",
+      "default" : "FooBar123",
       "target" : "password"
     }
   ],
@@ -213,7 +213,7 @@ Each synchronization situation has a default action associated with it (see <<sy
     {
       "situation" : "ABSENT",
       "action" : "CREATE",
-      "postAction": {
+      "postAction" : {
         "type" : "text/javascript",
         "source" : "// Send email notification ..."
       }
