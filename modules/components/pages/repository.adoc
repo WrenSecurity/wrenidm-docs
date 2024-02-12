@@ -74,13 +74,16 @@ Refer to HikariCP's https://www.javadoc.io/doc/com.zaxxer/HikariCP/3.2.0/com/zax
 
 Configuring a JNDI based data source is simply a matter of defining the JNDI lookup URL that will be used to retrieve the data source via JNDI.
 
-.Example JNDI based data source configuration
+.JNDI based data source configuration
+[example]
+====
 [source,json]
 ----
 {
   "jndiName" : "java:com/eng/jdbc/MySQLDB"
 }
 ----
+====
 
 
 === OSGi based data source
@@ -449,7 +452,7 @@ _Object to column_ is always a JSON map with JSON pointers as keys and values as
 ----
 ====
 
-CAUTION:: When using native database types for numeric values, make sure that the data is being read as the correct Java type.
+CAUTION: When using native database types for numeric values, make sure that the data is being read as the correct Java type.
 Failure to do so may result in phantom changes being reported in the audit log or unnecessary IDM synchronisation.
 
 Only two columns in the target tables are required for explicit mapping:
