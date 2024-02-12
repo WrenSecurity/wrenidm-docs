@@ -24,18 +24,18 @@ Example of configuration for Google SMTP server:
 [source,json]
 ----
 {
-  "host": "smtp.gmail.com",
-  "port": "587",
-  "debug": false,
-  "auth": {
-    "enable": true,
-    "username": "foobar",
-    "password": "wrensecurity"
+  "host" : "smtp.gmail.com",
+  "port" : "587",
+  "debug" : false,
+  "auth" : {
+    "enable" : true,
+    "username" : "foobar",
+    "password" : "wrensecurity"
   },
-  "starttls": {
-    "enable": true
+  "starttls" : {
+    "enable" : true
   },
-  "from": "info@wrensecurity.org"
+  "from" : "info@wrensecurity.org"
 }
 ----
 

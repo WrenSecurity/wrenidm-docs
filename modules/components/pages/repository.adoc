@@ -1,3 +1,511 @@
 = Repository
 
-NOTE: TBD: Supported repositories, configuration files, mapping between managed objects and repository, generic vs explicit mapping, predefined commands
+The _Repository Service_ components are responsible for mapping the JSON data model to and from a persistent storage via CREST semantics.
+The main implementation for the repository service is `JDBCRepoService` which uses _JDBC data source_ and _table handlers_ that map objects to and from database relations.
+
+
+== JDBC data source service
+
+The JDBC data source has its own dedicated service and configuration.
+
+OSGi service class:: `org.forgerock.openidm.datasource.jdbc.impl.JDBCDataSourceService`
+OSGi persistent identifier:: `org.forgerock.openidm.datasource.jdbc`
+Configuration file:: `datasource.jdbc-[name].json`
+
+The data source can be of three basic types:
+
+* plain JDBC – basic data source initialised and managed by the IDM
+* JNDI lookup – data source provided by the container and obtained through the JNDI mechanism
+* OSGI lookup – data source provided by the container and obtained through OSGi service lookup
+
+The JSON configuration differs slightly depending on the data source type, as shown in the following sections.
+
+The name of the OSGi service instance is completely arbitrary (e.g. `datasource.jdbc-helloworld.json`).
+The data source name is then referenced from the configuration of other OSGi services that actually use the data source directly.
+It is possible to define any number of data source service instances in this way.
+However it makes sense to define at most two data sources – one for the identity data and possibly a separate one for the workflow data.
+Most implementations would use just a single data source for both use cases.
+
+
+=== Simple JDBC data source
+
+A simple JDBC data source can be configured by simply using a target JDBC driver.
+
+Available configuration keys for all JDBC based configurations are:
+
+* `databaseName` – default catalogue (schema) name
+* `driverClass` – JDBC database driver class name
+* `jdbcUrl` – connection URL
+* `username` – connection username
+* `password` – connection password
+* `connectionTimeout` – connection timeout in milliseconds
+
+Additional properties are available for non-pooling data sources (these are specific for DB2):
+
+* `kerberosServerPrincipal` – name of the Kerberos principal
+* `securityMechanism` – specifies the DRDA security mechanism
+
+Data source connection pooling can be configured using the `connectionPool` object property.
+The nested `type` property is used to select the connection pool implementation – only HikariCP is currently supported.
+Any additional nested `connectionPool` object properties are mapped to the connection pool configuration via reflection.
+Refer to HikariCP's https://www.javadoc.io/doc/com.zaxxer/HikariCP/3.2.0/com/zaxxer/hikari/HikariConfig.html[`HikariConfig`] JavaDoc for information on available configuration keys.
+
+.Connection pool data source configuration
+[example]
+====
+[source,json]
+----
+{
+  "driverClass" : "org.postgresql.Driver",
+  "jdbcUrl" : "jdbc:postgresql://&{openidm.repo.host}:&{openidm.repo.port}/idmdb",
+  "username" : "wrenidm",
+  "password" : "wrenidm",
+  "connectionTimeout" : 30000,
+  "connectionPool" : {
+    "type" : "hikari",
+    "minimumIdle" : 20,
+    "maximumPoolSize" : 50
+  }
+}
+----
+====
+
+=== JNDI based data source
+
+Configuring a JNDI based data source is simply a matter of defining the JNDI lookup URL that will be used to retrieve the data source via JNDI.
+
+.Example JNDI based data source configuration
+[source,json]
+----
+{
+  "jndiName" : "java:com/eng/jdbc/MySQLDB"
+}
+----
+
+
+=== OSGi based data source
+
+Configuring an OSGi based data source consists only of defining an OSGi service lookup string (see https://github.com/WrenSecurity/wrenidm/blob/main/openidm-util/src/main/java/org/forgerock/openidm/osgi/OsgiName.java#L165:[`OsgiName`] for the details on the string format) that will be used to obtain the data source via the OSGi service lookup.
+
+
+.OSGi based data source configuration
+[example]
+====
+[source,json]
+----
+{
+  "osgiName" : "osgi:service/javax.sql.DataSource/(osgi.jndi.service.name=jdbc/wrenidm)"
+}
+----
+====
+
+
+== JDBC repository service
+
+The JDBC Repository Service is the main persistence service component for the IDM platform.
+
+OSGi service class:: `org.forgerock.openidm.repo.jdbc.impl.JDBCRepoService`
+OSGi persistent identifier:: `org.forgerock.openidm.repo.jdbc`
+Configuration file:: `repo.jdbc.json`
+
+There are two strategies for mapping JSON data model to a relational database data model:
+
+* *generic table mapping* – stores objects as a single stringified JSON value
+* *explicit table mapping* – stores object properties as individual table column values
+
+The generic table mapping strategy maps the JSON data model as a single stringified JSON value into a table with a predefined structure.
+The explicit table mapping strategy allows object properties to be mapped as table column values.
+Most of the configuration and logic for the repository service is divided betweed these two strategies.
+
+The content of the `repo.jdbc.json` configuration file has the following structure:
+
+* `useDataSource` – instance name of the data source service to use
+* `dbType` – type of database engine (see <<repo-supported-dbs>>)
+* `maxBatchSize` – maximum number of SQL updates allowed in a single transaction
+* `maxTxRetry` – maximum number of SQL execution retries when a retriable error is encountered (e.g. timeout) occurs
+* `queries` – predefined database SQL queries (see <<repo-predefined-queries>>)
+* `commands` – predefined database SQL commands (see <<repo-predefined-commands>>)
+* `resourceMapping` – JSON data model to database table and column mapping definition (see <<repo-resource-mapping>>)
+
+.Overview of the JDBC repository configuration structure
+[source,json]
+----
+{
+  "useDataSource" : "default",
+  "maxBatchSize" : 100,
+  "maxTxRetry" : 5,
+  "queries" : {
+    "genericTables" : {
+      // key-value map of SQL queries
+    },
+    "explicitTables" : {
+      // key-value map of SQL queries
+    }
+  },
+  "commands" : {
+    "genericTables" : {
+      // key-value map of SQL commands
+    },
+    "explicitTables" : {
+      // key-value map of SQL commands
+    }
+  },
+  "resourceMapping" : {
+    "default" : {
+      // default generic mapping
+    },
+    "genericMapping" : {
+      // generic table mapping declarations
+    },
+    "explicitMapping" : {
+      // explicit table mapping declarations
+    }
+  }
+}
+----
+
+
+[[repo-predefined-queries]]
+=== Predefined table queries
+
+SQL queries (i.e. `SELECT` statements) are defined separately for generically and explicitly mapped tables.
+All predefined queries support basic identifier interpolation (i.e. replacing `$\{name}` with identifier string) and named parameter resolution (i.e. using `$\{name}` as SQL parameter references).
+
+Supported identifier placeholders for generic table queries are:
+
+* `$\{_dbSchema}` – database catalogue / schema name
+* `$\{_mainTable}` – main table name (defined by the resource mapping)
+* `$\{_propTable}` – name of the helper table used to index JSON object property values (defined by the resource mapping)
+
+Supported identifier placeholders for the explicit table queries are:
+
+* `$\{_dbSchema}` – database catalogue / schema name
+* `$\{_table}` – mapped table name (defined by the resource mapping)
+
+The rest of the token placeholders (`$\{token}`) are treated as named parameters.
+Each parameter can have the following token structure – `$\{type-hint:param-name}`.
+The type hint can specify if the parameter is list based parameter (e.g. `$\{list:ids}`) and/or specify data type of the parameter.
+The only supported data type hint is for _integer_ parameters – `$\{int:foobar}`.
+
+Some of the named parameters are automatically available based on the content of the CREST request:
+
+* `$\{_resource}` – object type name (e.g. `managed/user`)
+* `$\{_pageSize}` – result page size (i.e. maximum number of objects returned)
+* `$\{_pagedResultsOffset}` – paged results offset (i.e. how many matching results should be skipped)
+
+The rest of the named parameters are mapped from the CREST query parameters.
+Failure to provide all the named parameters defined in the query will result in a _400 Bad Request_ error response.
+
+.Table queries configuration
+[example]
+====
+[source,json]
+----
+{
+  // ...
+  "queries" : {
+    "genericTables" : {
+      "query-all" : "SELECT fullobject FROM ${_dbSchema}.${_mainTable} obj OFFSET ${int:_pagedResultsOffset} LIMIT ${int:_pageSize}"
+    },
+    "explicitTables" : {
+      "query-all-ids" : "SELECT objectid FROM ${_dbSchema}.${_table}",
+      "query-by-name" : "SELECT * FROM ${_dbSchema}.${_table} WHERE name = ${name}"
+    }
+  }
+  // ...
+}
+----
+====
+
+
+[[repo-predefined-commands]]
+=== Predefined table commands
+
+Predefined SQL commands are pretty much the same as predefined SQL queries, except that commands usually represent a modification operation and don't return data.
+SQL commands support the same set of identifier placeholders and named parameter placeholders as SQL queries (see the previous section for more details).
+
+.Table commands configuration
+[example]
+====
+[source,json]
+----
+{
+  // ...
+  "commands" : {
+    "genericTables" : {
+      "delete-by-id" : "DELETE FROM ${_dbSchema}.${_mainTable} WHERE objectid = ${id}"
+    },
+    "explicitTables" : {
+      "delete-by-id" : "DELETE FROM ${_dbSchema}.${_table} WHERE objectid = ${id}"
+    }
+  }
+  // ...
+}
+----
+====
+
+
+[[repo-resource-mapping]]
+=== Resource table mapping
+
+The definition of how the JSON based data model is mapped to the table column data model is defined in the `resourceMapping` configuration section.
+The overall format of the configuration differs between generic table mapping (storing objects as stringified JSON value) and explicit table mapping (storing object properties as table column values).
+
+When the JDBC repository service handles a request for a particular resource, it maps the resource type to a predefined table handler.
+If no such handler is found, it uses the default generic handler definition.
+
+.Overview of resource mapping configuration section structure
+[source,json]
+----
+{
+  // ...
+  "resourceMapping" : {
+    "default" : {
+      // this is definition of default generic table mapping
+    },
+    "genericMapping" : {
+      "[resource-type]" : { // it is possible to use wildcards (e.g. `foobar/*`)
+        // generic table mapping definition
+      },
+      // ...
+    },
+    "explicitMapping" : {
+      "[resource-type]" : {
+        // explicit table mapping definition
+      }
+      // ...
+    }
+  }
+  // ...
+}
+----
+
+The following sections describe each strategies and its configuration in more detail.
+
+
+==== Generic table mapping
+
+Generic mapping stores the stringified JSON object as a single value.
+The following columns are required in a generic mapping table:
+
+.Generic table structure
+[cols="2,2,5"]
+|===
+|Column |Data type |Comment
+
+| `id`
+| `INTEGER`
+| autogenerated row identifier
+
+| `objecttype_id`
+| `INTEGER`
+| reference to the object type table
+
+| `rev`
+| `VARCHAR(36)`
+| object revision for optimistic locking
+
+| `objectid`
+| `VARCHAR(255)`
+| object identifier
+
+| `fullobject`
+| `TEXT`
+| serialized JSON object
+|===
+
+.Generic mapping example
+[example]
+====
+.JSON data model
+[source,json]
+----
+{
+  "id" : "bc7142b9-aabc-4d9d-a971-eea926acbb15",
+  "rev" : 0,
+  "name" : "John Doe",
+  "mail" : "john.doe@example.com"
+}
+----
+
+.Database table model
+----
+| id | objecttypes_id | objectid                             | rev | fullobject |
+| 7  | 1              | bc7142b9-aabc-4d9d-a971-eea926acbb15 | 0   | {"id":bc7142b9-aabc-4d9d-a971-eea926acbb15","rev":0,"name":"John Doe","mail":"john.doe@example.com"} |
+----
+====
+
+
+From the database perspective the object state is just a text-based value.
+The repository service needs to be able to filter (query) stored objects.
+Therefore, this strategy uses an additional property table to index selected property values.
+Databases that support indexing and querying of JSON data (PostgreSQL) don't need such table.
+
+.Additional indexed table for object properties
+[cols="2,2,5"]
+|===
+|Column |Data type |Comment
+
+| `[mainTable]_id`
+| `INTEGER`
+| reference to the _main table_ identifier
+
+| `propkey`
+| `VARCHAR(255)`
+| JSON pointer to the indexed property
+
+| `proptype`
+| `VARCHAR(32)`
+| java class name of the property value
+
+| `propvalue`
+| `TEXT`
+| stringified property value
+|===
+
+.Data stored inside auxiliary properties table
+[example]
+====
+----
+| genericobjects_id | propkey | proptype         | propvalue            |
+| 7                 | /name   | java.lang.String | John Doe             |
+| 7                 | /mail   | java.lang.String | john.doe@example.com |
+----
+====
+
+Which properties should be indexed (i.e. stored in the auxiliary properties table) can be configured in the table mapping configuration.
+
+Generic table mapping configurations have the following structure:
+
+* `mainTable` – name of the main table storing the object data
+* `propertiesTable` – name of the auxiliary properties table
+* `searchableDefault` – boolean property indicating whether each property should be stored in the auxiliary table (and thus can be used in resource filtering)
+* `properties` – configuration for individual properties or set of properties defined by a JSON pointer
+   * `searchable` – whether properties defined by the JSON pointer should be indexed (i.e. stored in the auxiliary table)
+
+
+.Sample generic table configuration
+[example]
+====
+[source,json]
+----
+{
+  "mainTable" : "genericobjects",
+  "propertiesTable" : "genericobjectproperties",
+  "searchableDefault" : true,
+  "properties" : {
+    "/certificate" : {
+      "searchable" : false
+    }
+  }
+}
+----
+====
+
+CAUTION: Each database engine has its own limit on the size of indexed values.
+Long values may be truncated to a shorter version (2000 characters by default) before indexing.
+This means that filters such as _equals_, _contains_ or _ends-with_ might not work as expected.
+
+
+==== Explicit table mapping
+
+The explicit table mapping strategy allows object properties to be mapped as table column values.
+The mapping is based on JSON pointers, so it is possible to map nested properties as column values as well.
+
+JSON properties can be stored as stringified values or as native database value types (e.g. storing decimal numbers as `NUMERIC` or boolean values as `TINYINT`).
+
+Explicit table mapping configurations have the following structure:
+
+* `table` – name of the target table
+* `objectToColumn` – mapping of JSON property (defined by JSON pointer) to a table column
+
+_Object to column_ is always a JSON map with JSON pointers as keys and values as one of the following:
+
+* simple string value specifying the target column name (then the stored value will always be stringified JSON value)
+* array value – `[columnName, valueType]` or `[columnName, valueType, javaType]` (see next bullet point)
+* object map with `column`, `valueType` and `javaType` properties
+  * `column` – target column name
+  * `valueType` – type of the JSON value (one of `STRING`, `NUMBER`, `BOOLEAN`, `JSON_MAP` or `JSON_LIST`)
+  * `javaType` – class name used within JDBC (required for native numeric type mapping)
+
+.Sample explicit table configuration
+[example]
+====
+[source,json]
+----
+{
+  "managed/user" : {
+  "table" : "manageduser",
+  "objectToColumn" : {
+      "_id" : "objectid",
+      "_rev" : "rev",
+      "name" : "name",
+      "password" : "pwd",
+      "workforceid" : [ "workforceid", "NUMBER", "java.lang.Integer" ],
+      "enabled" : { "column" : "enabled", "type" : "BOOLEAN" }
+    }
+  }
+}
+----
+====
+
+CAUTION:: When using native database types for numeric values, make sure that the data is being read as the correct Java type.
+Failure to do so may result in phantom changes being reported in the audit log or unnecessary IDM synchronisation.
+
+Only two columns in the target tables are required for explicit mapping:
+
+.Generic table structure
+[cols="2,2,5"]
+|===
+|Column |Data type |Comment
+
+| `objectid`
+| `VARCHAR(255)`
+| object identifier
+
+| `rev`
+| `VARCHAR(36)`
+| object revision for optimistic locking
+|===
+
+
+[[repo-supported-dbs]]
+== Supported database engines
+
+The following database engines with their SQL dialects and data types are supported as target persistent storage:
+
+.Supported database engines
+[cols="1,3,2,7"]
+|===
+|Configuration code |Database name |Supported version |Additional information
+
+| DB2
+| IBM Db2
+| 11+
+|
+
+| H2
+| H2
+| 2.2+
+| Used as the default in-memory database engine for demonstration purposes (not for production use).
+
+| SQLSERVER
+| Microsoft SQL Server
+| 2019+
+|
+
+| MYSQL
+| MySQL
+| 8+
+|
+
+| ORACLE
+| Oracle
+| 21+
+|
+
+| POSTGRESQL
+| PostgreSQL
+| 10+
+| Preferred production database with full JSON data model support.
+|===
