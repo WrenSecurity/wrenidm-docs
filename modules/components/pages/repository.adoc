@@ -110,6 +110,7 @@ The JDBC Repository Service is the main persistence service component for the ID
 OSGi service class:: `org.forgerock.openidm.repo.jdbc.impl.JDBCRepoService`
 OSGi persistent identifier:: `org.forgerock.openidm.repo.jdbc`
 Configuration file:: `repo.jdbc.json`
+Router mapping:: `/repo/*`
 
 There are two strategies for mapping JSON data model to a relational database data model:
 

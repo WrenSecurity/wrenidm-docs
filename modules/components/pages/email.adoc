@@ -3,6 +3,11 @@
 _Email Service_ provides a built-in service to send email notifications.
 The service uses external outbound SMTP mail server.
 
+OSGi service class:: `org.forgerock.openidm.external.email.impl.EmailServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.external.email`
+Configuration file:: `external.email.json`
+Router mapping:: `/external/email`
+
 
 == Outbound Server Configuration
 

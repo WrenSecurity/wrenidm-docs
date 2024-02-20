@@ -3,6 +3,11 @@
 _Audit Service_ is responsible for collecting and logging audit events.
 Internal audit components are built on top of shared components provided by _Wrensec Commons_ project.
 
+OSGi service class:: `org.forgerock.openidm.audit.impl.AuditServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.audit`
+Configuration file:: `audit.json`
+Router mapping:: `/audit`
+
 Several Wren:IDM services capture user and system interactions (e.g. user authentication or object synchronization) and generate audit events that are being routed to the central _audit service_.
 Audit service then uses preconfigured audit event handlers to further process captured events (e.g. by storing them in a database table).
 

@@ -1,9 +1,13 @@
 = Self-service
 
 _Self-service_ components offer a way to register self-service processes (e.g. forgotten password reset) and handle their execution.
-
 A self-service process is an anonymous process consisting of a set of discrete stages that the user progresses in a predefined order (e.g. user input or email verification).
 Each individual stage can access and mutate the shared process state (read necessary data from it or update it with data that may be useful to subsequent stages).
+
+OSGi service class:: `org.forgerock.openidm.selfservice.impl.SelfService`
+OSGi persistent identifier:: `org.forgerock.openidm.selfservice`
+Configuration file:: `selfservice-<processName>.json`
+Router mapping:: `/selfservice/<processName>`
 
 Wren:IDM provides support for three different self-service processes that can be configured out-of-the-box from the Admin UI (see <<selfservice-predefined-processes>>).
 
