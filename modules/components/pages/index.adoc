@@ -1,14 +1,19 @@
 = Component Reference
 
-The main strength of Wren:IDM is straightforwardness of its core concepts, which is also a cornerstone of its outstanding flexibility. It provides a JSON-based object model, where objects are treated uniformly using APIs. These objects include
+The main strength of Wren:IDM is the simplicity of its core concepts, which is also a cornerstone of its outstanding flexibility.
+It provides a JSON-based object model, where objects are treated uniformly using APIs.
+These objects include
 
-* managed objects – maintained in IDM's repository,
+* managed objects – maintained in the IDM repository,
 * system objects – representing external resources such as accounts,
-* configuration objects – representing various aspects of IDM configuration,
+* configuration objects – representing various aspects of the IDM configuration,
 * workflow objects – representing workflows,
 and many more.
 
-Working with these objects is pretty straightforward as well. E.g. when you patch a managed object like a _user_, it is updated in the repository and configured actions take place. When you patch a system object like an _account_, it is updated in the integrated system. Audit trails will appear in the system in both cases.
+Working with these objects is pretty straightforward as well.
+For example, when you patch a managed object such as a _user_, it is updated in the repository and configured actions take place.
+When you patch a system object such as an _account_, it is updated in the integrated system.
+In both cases audit trails are recorded in the system.
 
 The main system components are shown in following figure:
 
@@ -16,7 +21,8 @@ The main system components are shown in following figure:
 image::architecture.png[Wren:IDM Components Overview,600]
 
 While the depicted components are quite familiar, Wren:IDM takes a novel approach by providing access to all of them through a unified Resource API.
-The API is the same whether objects are being accessed through REST from outside the system, or internally from scripts and other parts of the IDM system itself. Please compare the following two examples.
+The API is the same whether objects are being accessed through REST from outside the system, or internally from scripts and other parts of the IDM system itself.
+Please compare the following two examples.
 
 [source,javascript]
 ----
@@ -32,17 +38,17 @@ $ curl -u openidm-admin:openidm-admin \
 'http://localhost:8080/openidm/managed/user?_queryFilter=givenName+eq+"Peggy"'
 ----
 
-As already said, the components are familiar from most IDM platforms:
+As already stated, the components are familiar from most IDM platforms:
 
-* Audit – component for auditing of all triggered events and states
+* Audit – auditing of all triggered events and states
+* Crypto – component responsible for data encryption
+* Custom endpoints (not shown in the diagram) – REST API endpoints defined by the implementers with their own business logic
+* Managed objects – IDM managed objects such as users, roles or any objects the organization uses
+* Policy – executing validations during object modifications
 * Repository – persistence layer for storing all managed objects
+* Scheduler – scheduled job management and execution
 * Script engine – component for scripts execution (JavaScript or Groovy)
-* Scheduler – component for executing scheduled jobs
-* Policy – component for executing validations during object modifications
-* Workflow – embedded workflow engine based on Activiti
-* Crypto – component for data encryption
-* Security – component for handling REST API security
-* Managed objects – IDM managed objects like users, roles or any objects the organization uses
-* System objects – integrated system objects
 * Provisioner – abstract layer for integrating external systems
-* Custom endpoints (not shown in the diagram) – REST API endpoints defined by the implementers to provide their own business logic
+* Security – REST API security
+* System objects – integrated system objects (exposed via _provisioners_)
+* Workflow – embedded workflow engine based on Flowable framework

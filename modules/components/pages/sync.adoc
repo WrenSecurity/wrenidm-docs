@@ -1,8 +1,18 @@
 = Synchronization
 
 _Synchronization_ Service is responsible for synchronizing data between resources.
+
+OSGi service class:: `org.forgerock.openidm.sync.impl.SynchronizationService`
+OSGi persistent identifier:: `org.forgerock.openidm.synchronization`
+Router mapping:: `/sync/*`
+
 Synchronization between two resources is defined by mapping in the project file `conf/sync.json`.
 Each mapping defines the transformation of a source object into a target object, as well as connected lifecycle rules.
+
+OSGi service class:: `org.forgerock.openidm.sync.impl.SyncMappings`
+OSGi persistent identifier:: `org.forgerock.openidm.sync`
+Configuration file:: `sync.json`
+
 The following chapters describe the details of the mapping definition and connected lifecycle policies.
 
 

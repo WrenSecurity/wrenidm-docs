@@ -3,6 +3,11 @@
 _Managed objects_ represent actual resources that are being managed and synchronized by Wren:IDM.
 Managed objects provide a flexible JSON-based data model with parametric relationships and support for hook scripts that can be attached to various lifecycle events.
 
+OSGi service class:: `org.forgerock.openidm.managed.ManagedObjectService`
+OSGi persistent identifier:: `org.forgerock.openidm.managed`
+Configuration file:: `managed.json`
+Router mapping:: `/managed/*`
+
 In it's default configuration Wren:IDM defines _user_, _role_ and _assignment_ as core managed objects.
 You can define your own managed objects (e.g. objects for organizational structure) or modify the predefined ones (e.g. add / remove properties).
 
