@@ -1,0 +1,108 @@
+= Upgrade Guide
+
+This guide provides instructions for upgrading Wren:IDM to the new version.
+
+
+== Wren:IDM 7
+
+If you are upgrading to the Wren:IDM 7, please follow the steps below.
+
+
+=== Migrate Workflows
+
+The workflow engine was migrated from Activiti to Flowable, so the process definitions also needed to be migrated.
+Follow these steps to migrate your workflows:
+
+. Perform database backup
++
+--
+Dump all tables with the prefix `act_` from the Wren:IDM database.
+Refer to your database documentation for information on dumping database data.
+--
+
+. Migrate process definitions
++
+--
+Update your BPMN process definitions and all associated files (such as HTML forms) to use Flowable annotations.
+See https://www.flowable.com/open-source/docs/bpmn/ch02-GettingStarted[Flowable^] documentation for more information.
+
+.Process execution listener migration
+[example]
+====
+[source,xml]
+----
+<!-- Before -->
+<definitions xmlns:activiti="http://activiti.org/bpmn" targetNamespace="http://www.activiti.org/test">
+  <process id="userRole" name="User Role Assignment" isExecutable="true">
+    <extensionElements>
+      <activiti:executionListener event="start" class="org.activiti.engine.impl.bpmn.listener.ScriptExecutionListener">
+        <activiti:field name="script">
+          <activiti:string>
+            execution.setVariable('status', 'RUNNING')
+          </activiti:string>
+        </activiti:field>
+        <activiti:field name="language" stringValue="groovy" />
+      </activiti:executionListener>
+...
+<!-- After -->
+<definitions xmlns:flowable="http://flowable.org/bpmn" targetNamespace="http://www.flowable.org/processdef">
+  <process id="userRole" name="User Role Assignment" isExecutable="true">
+    <extensionElements>
+      <flowable:executionListener event="start" class="org.flowable.engine.impl.bpmn.listener.ScriptExecutionListener">
+        <flowable:field name="script">
+          <flowable:string>
+            execution.setVariable('status', 'RUNNING')
+          </flowable:string>
+        </flowable:field>
+        <flowable:field name="language" stringValue="groovy" />
+      </flowable:executionListener>
+...
+----
+====
+--
+
+. Migrate running process instances
++
+--
+Get identifiers of all running process instances:
+
+[source,bash]
+----
+curl \
+--header "X-OpenIDM-Username: openidm-admin" \
+--header "X-OpenIDM-Password: openidm-admin" \
+--request GET \
+"http://localhost:8080/openidm/workflow/processinstance?_queryId=query-all-ids&_fields=id,processDefinitionId&_prettyPrint=true"
+{
+  "result" : [{
+    "_id" : "1",
+    "processDefinitionId" : "userRole:1:50"
+  }, {
+    "_id" : "2",
+    "processDefinitionId" : "userRole:2:100"
+  } ],
+  ...
+}
+----
+
+Migrate all process instances to the latest process definitions:
+
+[source,bash]
+----
+curl \
+  --header "X-OpenIDM-Username: openidm-admin" \
+  --header "X-OpenIDM-Password: openidm-admin" \
+  --request POST \
+  "http://localhost:8080/openidm/workflow/processinstance/1?_action=migrate"
+{"Successfully migrated process instance":"1"}
+
+curl \
+  --header "X-OpenIDM-Username: openidm-admin" \
+  --header "X-OpenIDM-Password: openidm-admin" \
+  --request POST \
+  "http://localhost:8080/openidm/workflow/processinstance/2?_action=migrate"
+{"Successfully migrated process instance":"2"}
+...
+----
+
+--
