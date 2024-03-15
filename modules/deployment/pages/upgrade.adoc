@@ -106,3 +106,40 @@ curl \
 ----
 
 --
+
+
+=== Migrate to HikariCP JDBC connection pool
+
+Support for the deprecated BoneCP JDBC connection pool has been completely removed.
+If your project is still using BoneCP, please migrate to HikariCP.
+
+.HikariCP JDBC connection pool configuration
+[example]
+====
+[source,json]
+----
+{
+  "driverClass" : "org.postgresql.Driver",
+  "jdbcUrl" : "jdbc:postgresql://&{openidm.repo.host}:&{openidm.repo.port}/idmdb",
+  "username" : "wrenidm",
+  "password" : "wrenidm",
+  "connectionTimeout" : 30000,
+  "connectionPool" : {
+    "type" : "hikari",
+    "minimumIdle" : 20,
+    "maximumPoolSize" : 50
+  }
+}
+----
+====
+
+Migrate configuration property (`config.properties`) to enable JDBC health monitoring:
+
+[source,diff]
+----
+- # enables the statistics MBean for BoneCP. Enabling this will have a performance impact on BoneCP.
+- openidm.bonecp.statistics.enabled=false
+
++ # Enables HikariCP MBean (JMX) monitoring
++ wrenidm.hikaricp.statistics.enabled=false
+----
