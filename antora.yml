@@ -1,7 +1,6 @@
 name: wrenidm
 title: Wren:IDM
 version: 7.x.x
-prerelease: -dev
 start_page: ROOT:index.adoc
 nav:
 - modules/ROOT/nav-intro.adoc

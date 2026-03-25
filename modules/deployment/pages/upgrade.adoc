@@ -8,6 +8,100 @@ This guide provides instructions for upgrading Wren:IDM to the new version.
 If you are upgrading to the Wren:IDM 7, please follow the steps below.
 
 
+=== Migrate Wren:ICF connector bundle names
+
+The connector bundle naming has changed from the OpenICF namespace to the Wren:ICF namespace.
+Update the `bundleName` field in all provisioner configuration files (`conf/provisioner.openicf-*.json`).
+
+.Provisioner bundle name migration
+[example]
+====
+[source,diff]
+----
+{
+  "connectorRef" : {
+-   "bundleName" : "org.forgerock.openicf.connectors.ldap-connector",
++   "bundleName" : "org.wrensecurity.wrenicf.connectors.ldap-connector",
+    "bundleVersion" : "...",
+    "connectorName" : "org.identityconnectors.ldap.LdapConnector"
+  },
+  ...
+}
+----
+====
+
+
+=== Migrate launcher configuration
+
+Some changes were introduced to the `conf/launcher.json` file, so you must update your existing launcher configuration before starting the new version.
+Review the reference https://github.com/WrenSecurity/wrenidm/blob/7.0.0/openidm-zip/src/main/resources/bin/launcher.json[launcher.json^] from the GitHub repository and apply the following changes to your configuration:
+
+* Update the OSGi bundle list to reflect renamed or newly required bundles.
+
+[NOTE]
+====
+The easiest approach is to start from the reference `launcher.json` and re-apply any project-specific customizations on top of it.
+====
+
+
+=== Migrate to Felix HTTP Jetty service
+
+PAX Web has been removed in favor of standard OSGi Http Whiteboard.
+The following changes to the `config.properties`` file are required for migration to the Felix HTTP Jetty service:
+
+.Felix HTTP Jetty service migration
+[example]
+====
+[source,diff]
+----
+- # Configures the web embedded Web server via the following file
+- org.ops4j.pax.web.config.file=&{launcher.project.location}/conf/jetty.xml
+-
+- # Enable pax web http/https services to enable jetty
+- org.osgi.service.http.enabled=true
+- org.osgi.service.http.secure.enabled=true
++ # Enable Felix HTTP Jetty service
++ org.apache.felix.http.enable=true
+----
+====
+
+=== Migrate to HikariCP JDBC connection pool
+
+Support for the deprecated BoneCP JDBC connection pool has been completely removed.
+If your project is still using BoneCP, please migrate to HikariCP.
+
+.HikariCP JDBC connection pool configuration
+[example]
+====
+[source,json]
+----
+{
+  "driverClass" : "org.postgresql.Driver",
+  "jdbcUrl" : "jdbc:postgresql://&{openidm.repo.host}:&{openidm.repo.port}/idmdb",
+  "username" : "wrenidm",
+  "password" : "wrenidm",
+  "connectionTimeout" : 30000,
+  "connectionPool" : {
+    "type" : "hikari",
+    "minimumIdle" : 20,
+    "maximumPoolSize" : 50
+  }
+}
+----
+====
+
+Migrate configuration property (`conf/config.properties`) to enable JDBC health monitoring:
+
+[source,diff]
+----
+- # enables the statistics MBean for BoneCP. Enabling this will have a performance impact on BoneCP.
+- openidm.bonecp.statistics.enabled=false
+
++ # Enables HikariCP MBean (JMX) monitoring
++ wrenidm.hikaricp.statistics.enabled=false
+----
+
+
 === Migrate Workflows
 
 The workflow engine was migrated from Activiti to Flowable, so the process definitions also needed to be migrated.
@@ -107,39 +201,3 @@ curl \
 
 --
 
-
-=== Migrate to HikariCP JDBC connection pool
-
-Support for the deprecated BoneCP JDBC connection pool has been completely removed.
-If your project is still using BoneCP, please migrate to HikariCP.
-
-.HikariCP JDBC connection pool configuration
-[example]
-====
-[source,json]
-----
-{
-  "driverClass" : "org.postgresql.Driver",
-  "jdbcUrl" : "jdbc:postgresql://&{openidm.repo.host}:&{openidm.repo.port}/idmdb",
-  "username" : "wrenidm",
-  "password" : "wrenidm",
-  "connectionTimeout" : 30000,
-  "connectionPool" : {
-    "type" : "hikari",
-    "minimumIdle" : 20,
-    "maximumPoolSize" : 50
-  }
-}
-----
-====
-
-Migrate configuration property (`config.properties`) to enable JDBC health monitoring:
-
-[source,diff]
-----
-- # enables the statistics MBean for BoneCP. Enabling this will have a performance impact on BoneCP.
-- openidm.bonecp.statistics.enabled=false
-
-+ # Enables HikariCP MBean (JMX) monitoring
-+ wrenidm.hikaricp.statistics.enabled=false
-----
