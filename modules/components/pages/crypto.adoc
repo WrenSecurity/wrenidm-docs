@@ -1,3 +1,202 @@
-= Crypto
+= Crypto Service
 
-NOTE: TBD: Value decryption / encryption
+_Crypto Service_ provides encryption, decryption, and salted hashing of JSON values for all Wren:IDM components.
+
+OSGi service class:: `org.forgerock.openidm.crypto.impl.CryptoServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.crypto`
+Configuration file:: none
+Router mapping:: none
+
+In most cases no configuration is required — sensitive fields in OSGi configuration files and in managed objects are protected automatically.
+Direct script use of `openidm.encrypt()`, `openidm.hash()`, or `openidm.decrypt()` is needed only when scripts must inspect or protect values explicitly.
+The service depends on `KeyStoreService` (pid `org.forgerock.openidm.keystore`) for access to cryptographic keys.
+It exposes the `CryptoService` interface (defined in `openidm-util`) to all OSGi consumers.
+
+== Encryption
+
+Encryption is reversible.
+The service encrypts a `JsonValue` using a symmetric key from the keystore, identified by a caller-supplied alias.
+The default cipher is `AES/CBC/PKCS5Padding`.
+
+The encrypted output is a JSON object with a `$crypto` wrapper, produced by `org.forgerock.json.crypto.JsonCrypto` and `SimpleEncryptor` from the commons-json-crypto library:
+
+[source,json]
+.Encrypted value wire format
+----
+{
+  "$crypto": {
+    "type": "x-simple-encryption",
+    "value": {
+      "cipher": "AES/CBC/PKCS5Padding",
+      "salt": "<base64>",
+      "iv":   "<base64>",
+      "data":  "<base64>",
+      "mac":  "<base64>",
+      "key":  "openidm-sym-default"
+    }
+  }
+}
+----
+
+A value is recognised as encrypted when `JsonCrypto.isJsonCrypto()` returns `true` for it, which checks for the `$crypto` wrapper.
+
+== Hashing
+
+Hashing is a one-way operation.
+The service computes a salted digest of the input value and stores the result as a `$crypto` blob.
+The original value cannot be recovered from the stored form.
+Encryption is appropriate when the original value must be recoverable (for example, passwords used in outbound connector authentication); hashing is appropriate when only equality verification is required.
+
+=== Hash algorithm
+
+A 16-byte cryptographically random salt is generated for each hash operation.
+The salt is appended to the plaintext, the combined buffer is hashed, and the result is stored as `base64(digest || salt)`.
+When verifying a value, the salt is extracted from the stored blob and the same procedure is repeated on the candidate plaintext.
+
+The following algorithms are supported:
+
+[cols="1,2",options="header"]
+|===
+| Algorithm constant | Description
+| `MD5` | MD5 message digest
+| `SHA-1` | SHA-1 message digest
+| `SHA-256` | 256-bit SHA-2 (default)
+| `SHA-384` | 384-bit SHA-2
+| `SHA-512` | 512-bit SHA-2
+|===
+
+=== Hashed value wire format
+
+[source,json]
+----
+{
+  "$crypto": {
+    "type": "salted-hash",
+    "value": {
+      "algorithm": "SHA-256",
+      "data": "<base64-encoded digest+salt>"
+    }
+  }
+}
+----
+
+A value is recognised as hashed when the `$crypto` wrapper is present and the nested `value.algorithm` field is defined.
+
+== Configuration File Protection
+
+Wren:IDM automatically encrypts sensitive fields in OSGi configuration files.
+Bundle developers declare which fields must be protected by implementing `MetaDataProvider`; the Crypto Service applies encryption automatically at write time based on that metadata.
+For built-in components, this metadata is already provided — no administrator action is needed.
+Integrators writing custom OSGi bundles must implement `org.forgerock.openidm.metadata.MetaDataProvider` (from the `openidm-util` module) to mark their sensitive fields.
+When a configuration is written, `ConfigCrypto` inspects the metadata and encrypts any plaintext sensitive fields using `AES/CBC/PKCS5Padding` and the alias specified by the `openidm.config.crypto.alias` boot property.
+
+The alias and other crypto-related properties are set in `conf/boot/boot.properties`.
+The shipped `boot.properties` sets `openidm.config.crypto.alias` to `openidm-sym-default`; the Java-level fallback (used only if the property is absent) is `openidm-config-default`.
+
+[source,properties]
+.Default `boot.properties` — crypto aliases
+----
+# Key alias used to encrypt sensitive configuration fields
+openidm.config.crypto.alias=openidm-sym-default
+
+# Key alias used for the self-service shared key
+openidm.config.crypto.selfservice.sharedkey.alias=openidm-selfservice-key
+
+# Key alias used for JWT session HMAC signing
+openidm.config.crypto.jwtsession.hmackey.alias=openidm-jwtsessionhmac-key
+----
+
+NOTE: Already-encrypted values (those with the `$crypto` wrapper) are not re-encrypted.
+Fields are only encrypted when their stored form is plaintext.
+
+== Managed Object Field Protection
+
+Individual fields in a managed object schema can be marked for automatic encryption or hashing.
+The protection is applied in the `onStore` lifecycle hook before writing to the repository, and is idempotent — already-protected values are not processed again.
+
+=== Field encryption
+
+Add an `encryption` object to the field definition in `managed.json`.
+The `key` property is required; `cipher` is optional and defaults to `AES/CBC/PKCS5Padding`.
+
+[cols="1,1,3",options="header"]
+|===
+| Property | Required | Description
+| `key` | yes | Keystore alias identifying the symmetric key to use
+| `cipher` | no | JCE cipher string; defaults to `AES/CBC/PKCS5Padding`
+|===
+
+The default `managed.json` uses this for the `password` field of the `user` object:
+
+[source,json]
+.Default `managed.json` — `password` field encryption
+----
+"password": {
+  "type": "string",
+  "encryption": {
+    "key": "openidm-sym-default"
+  }
+}
+----
+
+NOTE: Encrypted fields are returned as `$crypto` blobs when the object is read; decryption is not applied automatically on retrieval.
+To access the plaintext value from a script, call `openidm.decrypt()` on the returned blob, for example:
+
+[source,javascript]
+.Example (illustrative)
+----
+var plain = openidm.decrypt(object.password);
+----
+
+=== Field hashing
+
+Add a `secureHash` object to the field definition in `managed.json`.
+The `algorithm` property is required.
+
+[cols="1,1,3",options="header"]
+|===
+| Property | Required | Description
+| `algorithm` | yes | Hash algorithm name: `MD5`, `SHA-1`, `SHA-256`, `SHA-384`, or `SHA-512`
+|===
+
+== Script API
+
+The Crypto Service is exposed to scripts through the `openidm` binding.
+The following functions are available when the Crypto Service is active.
+For guidance on when to use hashing versus encryption, see <<_hashing,Hashing>>.
+
+[cols="2,4",options="header"]
+|===
+| Function | Description
+
+| `openidm.encrypt(value, cipher, alias)`
+| Encrypts `value` using the given keystore `alias`.
+Pass a JCE cipher string (e.g. `AES/CBC/PKCS5Padding`) or `null` to use the default.
+Returns a `$crypto` JSON object (see <<_encryption,Encryption>> for the wire format).
+
+| `openidm.decrypt(value)`
+| Decrypts a `$crypto` JSON object or map.
+Returns the original plaintext `JsonValue`.
+
+| `openidm.hash(value, algorithm)`
+| Hashes `value` using the given `algorithm`.
+Pass an algorithm constant (`MD5`, `SHA-1`, `SHA-256`, `SHA-384`, `SHA-512`) or `null` to use the default `SHA-256`.
+Returns a salted-hash `$crypto` JSON object (see <<_hashed_value_wire_format,wire format>>).
+
+| `openidm.isEncrypted(value)`
+| Returns `true` if `value` is a `$crypto` wrapper regardless of type, including salted-hash values.
+Use `openidm.isHashed` to test specifically for a salted hash.
+
+| `openidm.isHashed(value)`
+| Returns `true` if `value` is a `salted-hash` `$crypto` wrapper.
+
+| `openidm.matches(plaintext, value)`
+| Returns `true` if `plaintext` matches the hashed `value`.
+Extracts the salt from the stored blob and re-hashes `plaintext` for comparison.
+|===
+
+NOTE: `openidm.isEncrypted` returns `true` for any `$crypto` wrapper, including hashed values.
+Use `openidm.isHashed` to test specifically for a salted hash.
+
+All functions except `hash` are removed from the `openidm` binding in `unbindCryptoService` when the Crypto Service becomes inactive.
+`hash` remains available because `CryptoServiceImpl.hash()` uses only `MessageDigest`-based `FieldStorageScheme` implementations and requires no keystore access; it continues to operate via the retained service reference even after unbind.
