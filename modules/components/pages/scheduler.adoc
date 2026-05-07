@@ -1,3 +1,370 @@
-= Scheduling
+= Scheduler
 
-NOTE: TBD: Configuration of the service, how to shedule a task, management of the scheduled tasks
+_Scheduler Service_ schedules recurring and one-time jobs in Wren:IDM using the Quartz scheduler library.
+
+OSGi service class:: `org.forgerock.openidm.scheduler.SchedulerService`
+OSGi persistent identifier:: `org.forgerock.openidm.scheduler`
+Configuration file:: `conf/scheduler.json`
+Router mapping:: `/scheduler*`
+
+Two independent scheduler instances are maintained: an in-memory (volatile) scheduler for non-persisted schedules, and a persistent (repo-backed) scheduler for schedules that must survive node restarts.
+Schedules are defined via `conf/schedule-<name>.json` configuration files or dynamically through the REST API.
+
+
+== Scheduler Configuration
+
+.`conf/scheduler.json` structure
+[source,json]
+----
+{
+    "threadPool" : {
+        "threadCount" : "10"
+    },
+    "scheduler" : {
+        "executePersistentSchedules" : "&{openidm.scheduler.execute.persistent.schedules}"
+    },
+    "advancedProperties" : {
+        // Quartz StdSchedulerFactory key-value pairs
+    }
+}
+----
+
+`threadPool.threadCount`::
+Number of threads in the Quartz thread pool.
+Default: `10`.
+
+`scheduler.executePersistentSchedules`::
+Whether this node executes persistent (repo-backed) schedules.
+Resolved from the `openidm.scheduler.execute.persistent.schedules` property in `boot.properties`.
+Default: `true`.
+
+`advancedProperties`::
+Pass-through properties forwarded directly to the Quartz `StdSchedulerFactory`.
+Keys and values correspond to Quartz `StdSchedulerFactory` configuration properties.
+
+
+[[schedule-configuration]]
+== Schedule Configuration
+
+Each schedule is described by a set of fields, shared across both config-file-based and API-created schedules.
+
+.Schedule configuration structure
+[source,json]
+----
+{
+    "enabled" : true,
+    "persisted" : false,
+    "concurrentExecution" : false,
+    "type" : "cron",
+    "schedule" : "0 0/1 * * * ?",
+    "startTime" : "2026-01-01T00:00:00",
+    "endTime" : "2026-12-31T23:59:59",
+    "timeZone" : "Europe/Brussels",
+    "misfirePolicy" : "fireAndProceed",
+    "invokeService" : "sync",
+    "invokeContext" : { },
+    "invokeLogLevel" : "info"
+}
+----
+
+`enabled`::
+Whether the schedule is active.
+A disabled schedule is registered but not triggered.
+Type: Boolean. Default: `true`.
+
+`type`::
+Trigger type: `cron` or `simple`.
+`cron` fires repeatedly using the `schedule` expression; `simple` fires once, using `startTime` if set.
+See <<trigger-types>>.
+Type: String. Default: `cron`.
+
+`schedule`::
+Quartz cron expression.
+Required when `type` is `cron`.
+Type: String.
+
+`startTime`::
+Earliest time at which the trigger fires.
+Format: `yyyy-MM-dd'T'HH:mm:ss` (e.g. `2025-06-15T09:00:00`).
+No timezone offset; use `timeZone` instead.
+Type: String.
+
+`endTime`::
+Latest time at which the trigger fires.
+Same format as `startTime`.
+Type: String.
+
+`timeZone`::
+Java `TimeZone` ID (e.g. `America/New_York`).
+Applied to `startTime`/`endTime` parsing and the cron schedule.
+The JDK falls back to GMT for unrecognized IDs — WrenIDM throws `BadRequestException` in that case.
+Type: String.
+
+`invokeService`::
+Required.
+Target service PID or registered short name.
+Built-in short names: `taskscanner`, `script`, `sync`, `provisioner`.
+Custom services must implement `ScheduledService` and register the OSGi property `openidm.scheduledservice.invokeService=<short-name>`.
+Type: String.
+
+`invokeContext`::
+Caller-supplied JSON object passed to the invoked service at the `scheduler.invokeContext` key within the execution context map.
+Type: Object.
+
+`invokeLogLevel`::
+Log level for scheduler invocation log entries.
+Accepted values (case-insensitive): `trace`, `debug`, `info`, `warn`, `error`.
+Type: String. Default: `info`.
+
+`persisted`::
+When `true`, the schedule is stored in the repository and executed by the persistent scheduler.
+When `false`, the schedule is held in memory only and lost on node restart.
+When creating via `POST /scheduler/job`, this defaults to `true`.
+Type: Boolean. Default: `false`.
+
+`misfirePolicy`::
+Values: `fireAndProceed` (fires once immediately on recovery) or `doNothing` (skips missed executions).
+See <<trigger-types>> for per-type misfire behaviour.
+Type: String. Default: `fireAndProceed`.
+
+`concurrentExecution`::
+When `true`, concurrent execution is allowed — multiple instances of this specific job may run simultaneously.
+When `false`, a running instance of this job prevents it from firing again concurrently (per-job scope, not global).
+Type: Boolean. Default: `false`.
+
+NOTE: Short names for `invokeService` (values without a dot) are internally prefixed with `org.forgerock.openidm.` when stored in the job data map, then the prefix is stripped when building the OSGi filter at execution time.
+This means custom services are located by their bare short name (`openidm.scheduledservice.invokeService=<short-name>`), not the full prefixed PID.
+
+The scheduler-injected keys available to `ScheduledService.execute()` at runtime (in addition to `scheduler.invokeContext`) are: `scheduler.invoker-name`, `scheduler.scheduled-fire-time`, `scheduler.actual-fire-time`, and `scheduler.next-fire-time`.
+These keys are populated by the scheduler and cannot be set by the caller.
+
+
+[[trigger-types]]
+== Trigger Types
+
+`cron`::
+Wraps a Quartz `CronTrigger`.
+Fires repeatedly according to the cron expression in `schedule`.
+The `misfirePolicy` field (see <<schedule-configuration>>) controls recovery behaviour after a missed fire.
+
+`simple`::
+Wraps a Quartz `SimpleTrigger`.
+Fires once, then is automatically removed from the Quartz job store.
+If no `startTime` is set, the trigger fires 3 seconds after creation.
+This delay ensures the create response is returned before the job is removed from the Quartz store, and reduces the chance that a peer cluster node processes the job before the creating node.
+If `startTime` is set, the trigger fires at that time instead of the default 3-second delay.
+If `startTime` is in the past when the trigger is created, it fires immediately (`MISFIRE_INSTRUCTION_FIRE_NOW`).
+
+NOTE: The `misfirePolicy` field has no effect on `simple` triggers.
+`SimpleTrigger` always uses `MISFIRE_INSTRUCTION_FIRE_NOW`.
+
+
+== Config-File Schedules
+
+A schedule defined in `conf/schedule-<name>.json` is managed by `ScheduleConfigService` (OSGi PID `org.forgerock.openidm.schedule`).
+Each config file produces one OSGi component instance.
+On activation, the service registers with `SchedulerService`, which creates the corresponding Quartz job.
+
+NOTE: Factory instantiation for schedule config files is handled at the config-admin level by `JSONConfigInstaller`, which assigns a unique `config.factory-pid` per file at runtime.
+The `configurationFactory = true` DS annotation is present in `ScheduleConfigService` but commented out; factory behavior is intentionally delegated to the config-admin layer, not the DS component descriptor.
+
+On deactivation (config file removed or normal server shutdown), the job is removed from the scheduler.
+When the OSGi framework is stopping, however, persistent schedules are left intact in the repository so they can be picked up by any surviving cluster nodes on the next startup.
+In-memory schedules are not persisted and are discarded when the in-memory scheduler shuts down; no repository cleanup is performed.
+
+
+== REST API
+
+
+=== /scheduler — Service Actions
+
+.Actions on `/scheduler`
+[cols="2,1,3"]
+|===
+|Action |Method |Description
+
+|`validateQuartzCronExpression`
+|`POST /scheduler?_action=validateQuartzCronExpression`
+|Validates a Quartz cron expression.
+Request body: `{ "cronExpression": "<expr>" }`.
+Response: `{ "valid": true\|false }`.
+|===
+
+
+[[scheduler-job-api]]
+=== /scheduler/job — Schedule Management
+
+Supports create, read, update, delete, query, and the following actions:
+
+.Actions on `/scheduler/job`
+[cols="2,1,3"]
+|===
+|Action |Method |Description
+
+|`create`
+|`POST /scheduler/job?_action=create`
+|Creates a new schedule with a server-generated UUID.
+
+|`listCurrentlyExecutingJobs`
+|`POST /scheduler/job?_action=listCurrentlyExecutingJobs`
+|Returns a JSON array of currently running job instances across both schedulers.
+Each entry contains the same fields as a schedule object (see <<schedule-configuration>>), plus `_id`.
+
+|`pauseJobs`
+|`POST /scheduler/job?_action=pauseJobs`
+|Pauses all triggers on both the persistent and in-memory schedulers.
+Response: `{ "success": true }`.
+
+|`resumeJobs`
+|`POST /scheduler/job?_action=resumeJobs`
+|Resumes all triggers on both the persistent and in-memory schedulers.
+Response: `{ "success": true }`.
+|===
+
+Query supports `_queryId=query-all-ids` (returns IDs only) and `_queryFilter` expressions.
+
+NOTE: When creating via `POST /scheduler/job`, `persisted` defaults to `true`, unlike the config-file default of `false`.
+
+
+=== /scheduler/trigger — Trigger Read and Query
+
+Supports read and query only.
+Proxies requests to `/repo/scheduler/triggers`.
+Persistent scheduler state only; in-memory triggers are not exposed here.
+
+.Trigger record structure
+[source,json]
+----
+{
+    "name" : "...",
+    "group" : "...",
+    "state" : 0,
+    "previous_state" : -1,
+    "acquired" : false,
+    "nodeId" : null,
+    "serialized" : "..."
+}
+----
+
+`name`::
+Trigger name.
+Matches the job UUID.
+Type: String.
+
+`group`::
+Quartz trigger group name.
+Type: String.
+
+`state`::
+Current Quartz trigger state.
+Corresponds to Quartz 1.x `Trigger` interface constants: `STATE_NORMAL` (0), `STATE_PAUSED` (1), `STATE_COMPLETE` (2), `STATE_ERROR` (3), `STATE_BLOCKED` (4), `STATE_NONE` (-1).
+Constant names are referenced in `TriggerWrapper.java`; integer values are defined in the bundled Quartz library (`org.apache.servicemix.bundles.quartz`).
+Type: Integer.
+
+`previous_state`::
+Trigger state before the last transition.
+Uses the same integer constants as `state`.
+Type: Integer.
+
+`acquired`::
+Whether a cluster node has claimed this trigger for execution.
+Type: Boolean.
+
+`nodeId`::
+ID of the cluster node that acquired the trigger; `null` if not acquired.
+Type: String.
+
+`serialized`::
+Java-serialized Quartz `Trigger` object.
+Internal Quartz state; not intended for direct use by callers.
+It is documented here for completeness because it appears in query results.
+Type: String.
+
+
+=== /scheduler/waitingTriggers and /scheduler/acquiredTriggers
+
+Direct proxies to `/repo/scheduler/waitingTriggers` and `/repo/scheduler/acquiredTriggers` respectively.
+These are read-only views into the Quartz repo job store.
+
+
+== Task Scanner
+
+The task scanner (`/taskscanner*`) is a separate service invoked on a schedule by setting `invokeService` to `taskscanner` (expands to `org.forgerock.openidm.taskscanner`).
+When triggered, it executes a script-driven scan job and tracks run progress in memory.
+The `invokeContext` must include a `task.script` block specifying the script to run, and a `scan` block describing what objects to process.
+
+The full `invokeContext` structure for the task scanner is shown below.
+
+.Task scanner `invokeContext` structure
+[source,json]
+----
+{
+    "task.script" : {
+        "type" : "text/javascript",
+        "file" : "path/to/script.js"
+    },
+    "scan" : {
+        "object" : "managed/user",
+        "taskState" : {
+            "started" : "/taskScanned",
+            "completed" : "/taskCompleted"
+        },
+        "recovery" : {
+            "timeout" : "2d"
+        }
+    },
+    "maxRecords" : 1000,
+    "numberOfThreads" : 10,
+    "waitForCompletion" : false
+}
+----
+
+`task.script`::
+Required.
+Script reference object specifying the script to execute per object.
+Accepts a file reference (`{ "type": "<engine>", "file": "<path>" }`) or inline source (`{ "type": "<engine>", "source": "<script>" }`).
+Type: Object.
++
+At execution time, each script invocation receives two bindings: `input` (the current object as a map) and `objectID` (the full resource path of that object, e.g. `managed/user/<uuid>`).
+The script must return `Boolean.TRUE` to mark the object as completed (the `scan.taskState.completed` pointer is then updated).
+Any other return value causes the object to be marked as failed.
+
+`scan.object`::
+Required.
+Resource path of the object set to query and process (e.g. `managed/user`).
+Type: String.
+
+`scan.taskState.started`::
+Required.
+JSON pointer to the field on each object that records when processing started.
+Type: String (JSON Pointer).
+
+`scan.taskState.completed`::
+Required.
+JSON pointer to the field on each object that records when processing completed.
+Type: String (JSON Pointer).
+
+`scan.recovery.timeout`::
+Period after which an in-progress task record is considered stale and eligible for reprocessing.
+Expressed as a compact period string: a number followed immediately by a single letter suffix with no spaces — `s` (seconds), `m` (minutes), `h` (hours), `d` (days), `M` (months, uppercase), `y` (years).
+Suffixes are case-sensitive: lowercase `m` is minutes; uppercase `M` is months.
+Examples: `"2d"`, `"30m"`, `"1h"`.
+Defaults to 0 days (no recovery).
+Type: String.
+
+`maxRecords`::
+Maximum number of objects to process in this run.
+If absent, all query results are processed.
+Type: Integer.
+
+`numberOfThreads`::
+Number of worker threads for concurrent object processing.
+Type: Integer. Default: `10`.
+
+`waitForCompletion`::
+When `true`, the scheduler invocation blocks until the scan job completes.
+When `false`, the job runs asynchronously.
+Type: Boolean. Default: `false`.
+
+The system property `openidm.taskscanner.maxcompletedruns` controls how many completed task scan records are retained in memory.
+The default is `100`.
