@@ -4,7 +4,7 @@ _Scheduler Service_ schedules recurring and one-time jobs in Wren:IDM using the 
 
 OSGi service class:: `org.forgerock.openidm.scheduler.SchedulerService`
 OSGi persistent identifier:: `org.forgerock.openidm.scheduler`
-Configuration file:: `conf/scheduler.json`
+Configuration file:: `scheduler.json`
 Router mapping:: `/scheduler*`
 
 Two independent scheduler instances are maintained: an in-memory (volatile) scheduler for non-persisted schedules, and a persistent (repo-backed) scheduler for schedules that must survive node restarts.

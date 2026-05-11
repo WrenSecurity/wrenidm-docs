@@ -1,4 +1,452 @@
-[[policy-policies]]
-= Policies
+= Policy Service
 
-NOTE: TBD: Policies description, how to create custom policy
+_Policy Service_ validates JSON content against named policy rules before changes are persisted to managed, system, or internal repository resources.
+
+OSGi service class:: `org.forgerock.openidm.policy.PolicyService`
+OSGi persistent identifier:: `org.forgerock.openidm.policy`
+Configuration file:: `policy.json`
+Router mapping:: `/policy*`
+
+The Java service is a thin wrapper around the policy engine implemented in JavaScript.
+The service registers a `RequestHandler` that delegates `ACTION` and `READ` requests to the script named by `conf/policy.json` (default `policy.js`).
+The default `policy.js` ships with a built-in catalogue of policy functions and a processor that loads per-resource policy configuration, evaluates rules against the request content, and returns a list of failed `policyRequirement` codes.
+A separate router filter, `policyFilter.js`, calls the `validateObject` action implicitly on every `create` and `update` request to `managed/*`, `system/*`, or `repo/internal/*`.
+This is the primary path through which policy enforcement runs.
+
+
+[[policy-configuration]]
+== Policy Configuration
+
+`conf/policy.json` is loaded as the script configuration of `PolicyService` and is treated as a script descriptor (`type`, `file` or `source`) extended with policy-specific keys.
+
+.Default `conf/policy.json`
+[source,json]
+----
+{
+    "type" : "text/javascript",
+    "file" : "policy.js",
+    "additionalFiles" : [ ],
+    "resources" : [
+        {
+            "resource" : "repo/internal/user/*",
+            "properties" : [
+                {
+                    "name" : "_id",
+                    "policies" : [
+                        { "policyId" : "cannot-contain-characters",
+                          "params" : { "forbiddenChars" : [ "/" ] } }
+                    ]
+                },
+                {
+                    "name" : "password",
+                    "policies" : [
+                        { "policyId" : "required" },
+                        { "policyId" : "not-empty" },
+                        { "policyId" : "at-least-X-capitals", "params" : { "numCaps" : 1 } },
+                        { "policyId" : "at-least-X-numbers",  "params" : { "numNums" : 1 } },
+                        { "policyId" : "minimum-length",      "params" : { "minLength" : 8 } }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+----
+
+`type`::
+MIME type of the policy script.
+Type: String. Default: `text/javascript`.
+
+`file`::
+Path of the script file containing the policy implementation.
+The script is resolved through the standard Wren:IDM script registry.
+Type: String. Default: `policy.js`.
+
+`source`::
+Inline source code of the policy script (alternative to `file`; mutually exclusive).
+Use this to embed a policy script directly in `conf/policy.json` without a separate file.
+Type: String.
+
+`additionalFiles`::
+Optional array of paths to additional policy scripts resolved against the project home directory (the runtime directory containing `conf/`).
+An absolute path is used as-is; a relative path is resolved against project home, not against the script registry source directories — a file in `<project>/script/` must be referenced as `script/myFile.js`, not as a bare name.
+Each file is read at activation time, its source code is exposed to `policy.js` through the `additionalPolicies` binding, and `policy.js` evaluates each file to register custom policy IDs.
+Type: Array of String.
+
+`resources`::
+Array of per-resource policy configurations.
+Each entry binds a resource pattern to the list of properties and the policies that must hold for those properties.
+Type: Array.
+
+
+[[policy-resources-properties]]
+== Resource and Property Configuration
+
+.Resource and property configuration (illustrative)
+[source,json]
+----
+{
+    "resource" : "managed/user/*",
+    "properties" : [
+        {
+            "name" : "email",
+            "policies" : [
+                { "policyId" : "valid-email-address-format" }
+            ],
+            "conditionalPolicies" : [
+                {
+                    "condition" : {
+                        "type" : "text/javascript",
+                        "source" : "fullObject.accountStatus === 'active'"
+                    },
+                    "dependencies" : [ "accountStatus" ],
+                    "policies" : [
+                        { "policyId" : "required" }
+                    ]
+                }
+            ],
+            "fallbackPolicies" : [
+                { "policyId" : "not-empty" }
+            ]
+        }
+    ]
+}
+----
+
+`resource`::
+Resource pattern matched against the request resource path segment by segment, where `*` is a wildcard at any segment position.
+Type: String.
+
+`properties[]`::
+Policies attached to individual properties of the resource.
+Type: Array.
+
+`name`::
+Property name; supports a slash-separated path (e.g. `mail/0`) and a trailing `[*]` to apply policies to every element of an array property.
+Type: String.
+
+`policies[]`::
+List of policies that always apply to the property.
+Each entry uses `policyId` to reference a built-in or custom policy and an optional `params` object whose contents depend on the policy.
+Type: Array.
+
+`conditionalPolicies[]`::
+Optional list of `{ condition, dependencies, policies }` blocks that add policies only when their condition script evaluates to a truthy value (see <<policy-conditional>>).
+Type: Array.
+
+`fallbackPolicies[]`::
+Optional list of policies applied only when none of the `conditionalPolicies` matched; otherwise ignored.
+Type: Array.
+
+NOTE: The resource matcher requires the same number of slash-separated segments on both sides; it does not support prefix-style globs such as `managed/**`.
+To enforce policies on both collection-level and instance-level requests for the same resource type, add two separate entries: one with `resource: managed/user` and one with `resource: managed/user/*`.
+
+
+[[policy-builtin]]
+== Built-in Policies
+
+The default `policy.js` registers the following policies.
+Each policy publishes one or more `policyRequirement` codes, which are returned in failure responses.
+
+.Policy entry structure (illustrative)
+[source,json]
+----
+{
+    "policyId" : "minimum-length",
+    "params" : { "minLength" : 8 }
+}
+----
+
+`required`::
+Fails when the property value is `undefined`.
+Always evaluated.
+Requirement code: `REQUIRED`.
+
+`not-empty`::
+Fails when the value is `null` or an empty string/array.
+Skipped if the property is absent (`validateOnlyIfPresent` is set); unlike `required`, this policy does not fail for missing properties.
+Requirement code: `REQUIRED`.
+
+`unique`::
+Queries the parent collection (the resource path with the leaf segment removed) for a sibling whose value matches the property, using the filter `<propertyName> eq "<value>"`.
+The target resource must support `_queryFilter` queries; this policy is suited to `managed/` and `repo/` resources but will fail at runtime on `system/` connectors that do not support filtered queries.
+Requirement code: `UNIQUE`.
+
+`no-internal-user-conflict`::
+Runs the named query `credential-internaluser-query` against `repo/internal/user` to detect username collisions.
+This named query must be defined in the repository configuration; it is included in all default `conf/repo.*.json` configurations shipped with Wren:IDM.
+Requirement code: `UNIQUE`.
+
+`mapping-exists`::
+Reads `config/sync` (the internal configuration resource backed by `conf/sync.json`) and checks that the supplied value is the name of a configured sync mapping.
+Requirement code: `MAPPING_EXISTS`.
+
+`regexpMatches`::
+Tests the value against `params.regexp` (with optional `params.flags`).
+Requirement code: `MATCH_REGEXP`.
+
+`valid-type`::
+Compares the runtime type of the value (`null`, `array`, or `typeof` result) against `params.types`.
+Requirement code: `VALID_TYPE`.
+
+`valid-date`::
+Accepts any string parseable by `new Date(value)`.
+Requirement code: `VALID_DATE`.
+
+`valid-email-address-format`::
+Tests against `/.+@.+\\..+/i`.
+Requirement code: `VALID_EMAIL_ADDRESS_FORMAT`.
+
+`valid-name-format`::
+Permits letters, hyphens, whitespace, apostrophes, and a fixed set of accented Unicode characters.
+Requirement code: `VALID_NAME_FORMAT`.
+
+`valid-phone-format`::
+Permits digits, spaces, parentheses, hyphens, and an optional leading `+`.
+Requirement code: `VALID_PHONE_FORMAT`.
+
+`at-least-X-capitals`::
+Requires at least `params.numCaps` capital letters.
+Requirement code: `AT_LEAST_X_CAPITAL_LETTERS`.
+
+`at-least-X-numbers`::
+Requires at least `params.numNums` digits.
+Requirement code: `AT_LEAST_X_NUMBERS`.
+
+`minimum-length`::
+Requires `value.length >= params.minLength`.
+Requirement code: `MIN_LENGTH`.
+
+`cannot-contain-characters`::
+Fails if any character in `params.forbiddenChars` appears in the value.
+Requirement code: `CANNOT_CONTAIN_CHARACTERS`.
+
+`cannot-contain-others`::
+Fails if the value contains the value of any property listed in `params.disallowedFields`.
+On the server, the persisted object is also read and any missing `disallowedFields` values are filled in from it before the comparison.
+When `clientValidation` is enabled and this policy runs in the browser, the persisted object is not available; only the in-flight object is used.
+Requirement code: `CANNOT_CONTAIN_OTHERS`.
+
+`cannot-contain-duplicates`::
+Fails if a list value contains repeated entries.
+Requirement code: `CANNOT_CONTAIN_DUPLICATES`.
+
+`max-attempts-triggers-lock-cooldown`::
+Fails when the value exceeds `params.max` and the timestamp at `params.dateTimeField` is within the last `params.numMinutes` minutes.
+The field named by `params.dateTimeField` is read from the in-flight object and passed to JavaScript's `new Date()` constructor; any format accepted by `new Date()` is valid, including ISO 8601 strings.
+Requirement code: `NO_MORE_THAN_X_ATTEMPTS_WITHIN_Y_MINUTES`.
+
+TIP: Policies whose definition sets `validateOnlyIfPresent` (the default for most format/length checks) are skipped when the property value is `undefined`; explicit `required` or `not-empty` is required to reject missing values.
+`validateOnlyIfPresent` is part of the policy definition and cannot be overridden per-entry in `conf/policy.json`.
+
+NOTE: The `clientValidation` flag, set in the policy definition (not in `conf/policy.json`), determines whether the policy function is published to the UI for in-browser validation; failure messages are otherwise produced server-side only.
+
+
+[[policy-managed-implicit]]
+== Implicit Policies for Managed Objects
+
+For resources of the form `managed/<object>` and `managed/<object>/<id>`, the policy processor reads `config/managed` and synthesizes additional policies from the schema of the matching managed object before evaluating the configured `properties[]`.
+
+The implicit policies derived from each `schema.properties` entry are:
+
+* `required` – added when the property name is listed in `schema.required`.
+* `not-empty` – added when the property type is a non-`null` array, or when `minLength` is greater than zero.
+* `minimum-length` – added when `minLength` is set on a string property.
+* `regexpMatches` – added with `params.regexp = pattern` when `pattern` is set on a string property.
+* `valid-type` – always added, with `params.types` derived from the schema type (relationship types are mapped to `object`).
+
+Implicit policies are merged with the corresponding entry in `conf/policy.json`: on `policyId` collision, the schema-derived policy overwrites the configured entry; non-matching schema-derived policies are appended.
+Properties not listed in `conf/policy.json` are added from the schema including their `conditionalPolicies` and `fallbackPolicies`.
+For properties already present in `conf/policy.json`, `conditionalPolicies` from the schema-derived entry are merged with the configured ones; schema-derived `fallbackPolicies` are not propagated.
+
+NOTE: Schema-derived policies apply only to the `managed/` resource family; the matcher returns an empty list for `repo/`, `system/`, or any path with more than three segments (for example, `managed/user/abc123/roles` has four segments and is not matched).
+
+
+[[policy-conditional]]
+== Conditional and Fallback Policies
+
+Each entry of `conditionalPolicies[]` defines a conditional policy block evaluated per property at validation time.
+`fallbackPolicies[]` is a separate property-level sibling of `conditionalPolicies[]`, not a field within each entry.
+
+.Conditional policy entry (illustrative)
+[source,json]
+----
+{
+    "name" : "email",
+    "policies" : [ ],
+    "conditionalPolicies" : [
+        {
+            "condition" : {
+                "type" : "text/javascript",
+                "source" : "fullObject.accountStatus === 'active'"
+            },
+            "dependencies" : [ "accountStatus" ],
+            "policies" : [
+                { "policyId" : "required" }
+            ]
+        }
+    ],
+    "fallbackPolicies" : [
+        { "policyId" : "not-empty" }
+    ]
+}
+----
+
+`dependencies`::
+List of top-level property names that must be present on the in-flight object; if any name is missing, the entry is skipped.
+The check uses `hasOwnProperty` on `fullObject`, so only top-level keys are valid — the slash-path and `[*]` notation used in `properties[].name` is not supported in `dependencies`.
+Type: Array of String.
+
+`condition`::
+Script descriptor evaluated through the `script` action.
+Valid descriptor keys are `type` (required, e.g. `"text/javascript"`), `source` (inline script), `file` (file path resolved through the script registry), and `globals` (a map whose entries are injected as named variables into the condition script scope).
+Before evaluation, `policy.js` sets `fullObject` directly on the condition descriptor object; `fullObject` is available as a named variable inside the condition script.
+A truthy result adds the entry's `policies` to the validation set.
+At evaluation time, `fullObject` contains the full in-flight request body as submitted; fields not included in the request body are not present in `fullObject`.
+The complete set of named bindings available to the condition script is `fullObject` plus any entries in `globals`.
+Type: Object.
+
+`policies`::
+List of policy entries to apply when the condition evaluates to a truthy value.
+Type: Array.
+
+`fallbackPolicies[]` is a property-level sibling of `conditionalPolicies[]`.
+It is used when none of the conditional entries matched:
+
+`fallbackPolicies`::
+List of policies applied only when none of the `conditionalPolicies` entries matched; otherwise ignored.
+Type: Array.
+
+WARNING: The standard scripted-service bindings (`request`, `context`, `resourceName`, `resourcePath`) are not injected in this evaluation path.
+
+
+[[policy-custom]]
+== Custom Policy Scripts
+
+The `additionalFiles` configuration key registers extra policy IDs without modifying the default `policy.js`.
+
+At service activation each entry of `additionalFiles` is treated as a project-relative path resolved through `IdentityServer.getFileForProjectPath`.
+The default `policy.js` then `eval()`s each entry.
+During evaluation, the additional script calls `addPolicy()` to register new policy IDs and declares their validation functions.
+
+A custom additional-policy file must call `addPolicy()` (provided as an implicit function by the loader) to register each policy and declare its validation function as a named function declaration whose name matches `policyExec`.
+`policyExec` must be the name of a top-level function declaration (not a variable assignment or expression) in the same file; the loader resolves the function by evaluating the `policyExec` name in the calling scope after `eval()`.
+The validation function receives four arguments: `fullObject` (the in-flight request body), `value` (the property value), `params` (the policy params from `conf/policy.json`), and `property` (the property name).
+It returns an empty array on success or an array of `{ "policyRequirement": "<CODE>", ... }` objects on failure.
+
+.Custom policy file skeleton
+[source,javascript]
+----
+/* addPolicy() is provided by the loader; do not declare a top-level policyConfig variable —
+   it would shadow policy.js's internal policy accumulator */
+addPolicy({
+    policyId: "my-custom-policy",
+    policyExec: "myCustomPolicy",
+    policyRequirements: ["MY_CUSTOM_REQUIREMENT"],
+    validateOnlyIfPresent: true,
+    clientValidation: false
+});
+
+/* Validation function — must be a named function declaration, not a var assignment */
+function myCustomPolicy(fullObject, value, params, property) {
+    if (/* value fails the check */) {
+        return [{ "policyRequirement": "MY_CUSTOM_REQUIREMENT" }];
+    }
+    return [];
+}
+----
+
+WARNING: Files referenced by `additionalFiles` are loaded with `eval()` and run with full server-side privileges.
+The path is resolved relative to the project home and is not restricted to the script directory; treat additional policy files as trusted code.
+
+NOTE: To replace the entire policy engine rather than extend it, change `"file"` in `conf/policy.json` to point to a custom script name.
+The script registry resolves names across four source directories in priority order: `project-script` (`<project>/script/`) first, then `project`, `install`, and `default` (`bin/defaults/script/`) last.
+A `policy.js` placed in `<project>/script/` therefore shadows the shipped default without modifying the installation.
+
+
+[[policy-enforcement]]
+== Policy Enforcement
+
+Wren:IDM enforces policies through three independent paths.
+
+[[policy-enforcement-router]]
+=== Router Filter
+
+`conf/router.json` registers `policyFilter.js` as an `onRequest` filter for resource paths matching `^(managed|system|repo/internal)($|(/.+))` on the `create` and `update` methods.
+Before forwarding the request, the filter calls `policy/<resource path>` (for example, `policy/managed/user` for a request targeting `managed/user`) with the `validateObject` action and the request content.
+A non-`true` `result` causes the filter to throw a 403 `Policy validation failed` error and aborts the request.
+
+[[policy-enforcement-managed-patch]]
+=== Managed Object Patches
+
+`ManagedObjectSet` enforces policies on `patch` requests against managed objects.
+After applying the JSON patch operations and computing the new value, the service builds a partial object containing only the patched fields with their post-patch values and issues a `validateProperty` action on `policy/managed/<object>/<id>`.
+Because `fullObject` inside conditional policy evaluation equals the request body, conditional policies with `dependencies` on fields not included in the patch will be skipped — not failed — during patch-triggered validation.
+The request is rejected with a 403 `Failed policy validation` if the result is not `true`.
+
+[[policy-enforcement-explicit]]
+=== Explicit REST Calls
+
+REST clients may invoke policy validation directly via the `/policy` endpoint without persisting the resource (see <<policy-rest-actions>>).
+
+[[policy-enforcement-toggle]]
+=== Disabling Enforcement
+
+Both enforcement paths consult the boot property `openidm.policy.enforcement.enabled`, which defaults to `true` in `conf/boot/boot.properties`.
+Setting the property to `false` disables enforcement: `policyFilter.js` returns immediately, and `ManagedObjectSet` skips the patch-time validation.
+Because `ManagedObjectSet` reads the property once at construction time and stores it as a `final` field, a service restart is required for the change to take effect.
+
+NOTE: The toggle does not affect explicit calls to `/policy?_action=validateObject` or `validateProperty`; those always run the validation and return the result.
+
+
+[[policy-rest-actions]]
+== REST Endpoint
+
+The service registers at `/policy*` with `STARTS_WITH` routing; the path after `/policy/` is treated as the resource path being validated.
+The handler accepts only `READ` and `ACTION` requests; all other request types return a `NotSupportedException`.
+
+.`/policy` operations
+[cols="1,2,5"]
+|===
+|Method |Action |Description
+
+|`READ`
+|—
+|Reads the policy configuration for the resource path encoded in the URL.
++
+*Empty path (`/policy`):* returns `{ "resources": [...] }` — every entry from `resources[]`, each extended with per-property `policyRequirements` summaries.
++
+*Non-empty path (`/policy/<resource>`):* returns the matching resource entry extended with the per-property `policyRequirements` summary.
+Where `clientValidation` is `true` on a policy definition, the validation function source code is also included as a string (the JavaScript function body as returned by `Function.toString()`).
+
+|`ACTION`
+|`validateObject`
+|Validates the entire request content against every property configured for the resource.
+The response is `{ "result": <boolean>, "failedPolicyRequirements": [ ... ] }`.
+Each entry of `failedPolicyRequirements` has a `property` field (the property name or path) and a `policyRequirements` array of failed requirement objects.
+
+|`ACTION`
+|`validateProperty`
+|Validates only the fields supplied in the request content against their configured policies.
+The request body is a partial object with property names as keys and their values to validate as values (e.g. `{ "password": "newValue" }`).
+The entire request body is also used as `fullObject` for conditional policy dependency resolution; callers using `conditionalPolicies` with `dependencies` must include those dependency fields in the request body even if they are not being validated — a missing dependency field causes the conditional policy to be skipped, not to fail.
+Each supplied field is evaluated against its full configured policy set — the same set `validateObject` would apply to that field; only the number of validated fields differs, not the depth of validation.
+Responds with the same shape as `validateObject`.
+|===
+
+WARNING: When using `validateProperty` with properties that have `conditionalPolicies` with `dependencies`, the caller must include all dependency-field values in the request body even if those fields are not being validated.
+A missing dependency field causes the conditional policy to be silently skipped — the response will still report `"result": true` even if the conditional policy would have failed.
+This same behaviour applies on `patch` requests through the router filter (see <<policy-enforcement-managed-patch>>).
+
+.`failedPolicyRequirements` entry shape
+[source,json]
+----
+{
+  "property": "password",
+  "policyRequirements": [
+    { "policyRequirement": "MIN_LENGTH", "params": { "minLength": 8 } }
+  ]
+}
+----
+
+The policy script receives the standard scripted-service bindings (`request`, `context`, `resourceName`, `resourcePath`) and the policy-specific `resources` binding injected by `PolicyService` (a defensive copy of `configuration.resources`).
