@@ -1,3 +1,634 @@
 = Provisioner
 
-NOTE: TBD: Connectivity configuration, objects schema, default connectors and it's configuration
+The _Provisioner_ connects Wren:IDM to external systems through connector plugins and exposes them as CREST resources under the `/system` endpoint.
+Wren:IDM ships with one provisioner implementation: the Wren:ICF (OpenICF) provisioner, which integrates with Identity Connector Framework connectors.
+
+== Architecture
+
+The provisioner layer consists of three cooperating services.
+
+=== System Object Set Service
+
+OSGi service class:: `org.forgerock.openidm.provisioner.impl.SystemObjectSetService`
+OSGi persistent identifier:: `org.forgerock.openidm.provisioner`
+Router mapping:: `/system`
+
+The _System Object Set Service_ is a singleton that owns the `/system` route and acts as a hub across all active provisioner instances.
+It aggregates any number of running `ProvisionerService` implementations and dispatches system-level actions—testing connections, triggering live sync, and generating connector configurations—to the appropriate instance.
+It also implements the `ScheduledService` interface so that live sync can be triggered by the Wren:IDM scheduler.
+No configuration file is required; the service starts unconditionally.
+
+=== OpenICF Provisioner Service
+
+OSGi service class:: `org.forgerock.openidm.provisioner.openicf.impl.OpenICFProvisionerService`
+OSGi persistent identifier:: `org.forgerock.openidm.provisioner.openicf`
+Configuration file:: `provisioner.openicf-[name].json`
+
+One _OpenICF Provisioner Service_ instance is created per connector configuration file.
+Each instance registers its own routes under `/system/<name>` and `/system/<name>/{objectClass}`, where `<name>` is read from the `name` field of the configuration file.
+The service resolves the connector bundle asynchronously via `ConnectorInfoProviderService` and builds a `ConnectorFacade` when the connector info becomes available.
+Setting `enabled` to `false` in the configuration prevents connector initialisation and route registration while keeping the OSGi service active.
+
+=== Connector Info Provider Service
+
+OSGi service class:: `org.forgerock.openidm.provisioner.openicf.impl.ConnectorInfoProviderService`
+OSGi persistent identifier:: `org.forgerock.openidm.provisioner.openicf.connectorinfoprovider`
+Configuration file:: `provisioner.openicf.connectorinfoprovider.json` (optional)
+
+The _Connector Info Provider Service_ loads connector bundles from the local file system and from remote Wren:ICF connector servers, making them available to all provisioner instances.
+Because its OSGi configuration policy is `OPTIONAL`, the service starts without a configuration file using built-in defaults.
+
+
+== Connector Info Provider configuration
+
+The optional `provisioner.openicf.connectorinfoprovider.json` file controls where connectors are loaded from and how remote connector servers are reached.
+
+.`provisioner.openicf.connectorinfoprovider.json` structure
+[source,json]
+----
+{
+  "connectorsLocation": "connectors",
+  "remoteConnectorServers": [
+    {
+      "name": "myServer",
+      "host": "connector-host.example.com",
+      "port": 8759,
+      "key": { "$crypto": { "type": "x-simple-encryption", "value": { "cipher": "AES/CBC/PKCS5Padding", "data": "..." } } },
+      "useSSL": false,
+      "timeout": 0,
+      "protocol": "websocket"
+    }
+  ],
+  "remoteConnectorServersGroups": [
+    {
+      "name": "myGroup",
+      "algorithm": "failover",
+      "serversList": [ "myServer" ]
+    }
+  ]
+}
+----
+
+`connectorsLocation`::
+Path to the directory containing local connector JAR files.
+Relative paths are resolved against the Wren:IDM installation directory (the value of the `--install-location` / `-i` startup parameter; defaults to the process working directory when not set).
+Default: `connectors`.
+
+`remoteConnectorServers`::
+List of remote Wren:ICF connector servers to connect to.
++
+`name`:::
+Unique name for this server; referenced as `connectorHostRef` in provisioner configuration files.
+Required.
+`host`:::
+Hostname or IP address of the remote connector server.
+Required.
+`port`:::
+TCP port.
+Default: `8759`.
+`key`:::
+Shared secret used to authenticate with the remote server.
+Store as an encrypted value using the `$crypto` wrapper.
+To produce the encrypted value, use the Crypto service `encrypt` action or the Wren:IDM admin UI — see xref:components/crypto.adoc[Crypto service].
+Required.
+`useSSL`:::
+Whether to use SSL/TLS.
+Default: `false`.
+`timeout`:::
+Connection timeout in milliseconds, passed as the timeout parameter to the ICF `RemoteFrameworkConnectionInfo` constructor.
+The exact scope (TCP establishment vs. socket read) is defined by the ICF framework.
+`0` means no timeout.
+Default: `0`.
+`protocol`:::
+Set to `"websocket"` to use the WebSocket-based ICF 1.5 protocol.
+Default: absent (ICF 1.4 Java serialisation protocol is used).
+
+`remoteConnectorServersGroups`::
+Load-balancing groups over named remote servers.
+A group name can be used as a `connectorHostRef` value just like a single server name.
++
+`name`:::
+Group identifier, referenced as `connectorHostRef` in provisioner configs.
+`algorithm`:::
+Load-balancing strategy: `"failover"` always sends to the first available server in order; `"roundrobin"` distributes requests across all servers in the list.
+`serversList`:::
+Ordered list of server names from `remoteConnectorServers` to include in this group.
+For the `failover` algorithm, the first reachable server in this list is used; order therefore determines failover priority.
+
+
+== Connector configuration
+
+One configuration file per connector is required.
+The file must be named `provisioner.openicf-[name].json`; the `name` field inside the file is the system name used in resource paths.
+The filename suffix is not used by the service — the `name` field in the JSON body always determines the system name, regardless of the filename.
+The value must be alphanumeric (Unicode letters and digits only, as defined by `Character.isLetterOrDigit()`; no hyphens, underscores, spaces, or other separators); a non-alphanumeric `name` causes a configuration activation error.
+
+.Example `provisioner.openicf-ldap.json` (illustrative, abbreviated)
+[source,json]
+----
+{
+  "name": "ldap",
+  "enabled": true,
+  "connectorRef": {
+    "bundleName": "org.forgerock.openicf.connectors.ldap-connector",
+    "bundleVersion": "[1.4.0.0,1.5.0.0)",
+    "connectorName": "org.identityconnectors.ldap.LdapConnector",
+    "connectorHostRef": "myServer"
+  },
+  "poolConfigOption": {
+    "maxObjects": 10,
+    "maxIdle": 10,
+    "maxWait": 150000,
+    "minEvictableIdleTimeMillis": 120000,
+    "minIdle": 1
+  },
+  "operationTimeout": {
+    "CREATE": -1,
+    "UPDATE": -1,
+    "DELETE": -1,
+    "SEARCH": -1,
+    "SYNC": -1,
+    "TEST": -1,
+    "AUTHENTICATE": -1,
+    "SCHEMA": -1,
+    "VALIDATE": -1,
+    "SCRIPT_ON_CONNECTOR": -1,
+    "SCRIPT_ON_RESOURCE": -1
+  },
+  "configurationProperties": {},
+  "resultsHandlerConfig": {
+    "enableNormalizingResultsHandler": true,
+    "enableFilteredResultsHandler": true,
+    "enableCaseInsensitiveFilter": false,
+    "enableAttributesToGetSearchResultsHandler": true
+  },
+  "syncFailureHandler": {
+    "maxRetries": 5,
+    "postRetryAction": "logged-ignore"
+  }
+}
+----
+
+`name`::
+The system identifier; becomes the route segment at `/system/<name>`.
+Required.
+
+`enabled`::
+Set to `false` to disable this connector without removing the configuration file.
+Default: `true`.
+
+`connectorRef`::
+Identifies the connector bundle to load.
++
+`bundleName`:::
+OSGi bundle symbolic name of the connector.
+Required.
+`bundleVersion`:::
+Version or version range of the connector bundle, using OSGi range syntax where `[` is inclusive and `)` is exclusive (e.g. `[1.4.0.0,1.5.0.0)`).
+Required.
+`connectorName`:::
+Fully-qualified Java class name of the connector implementation.
+Required.
+`connectorHostRef`:::
+Name of the remote server or group that hosts this connector.
+The value may be a server name or a group name defined in `remoteConnectorServersGroups`; see <<_connector_info_provider_configuration>>.
+Omit for locally-deployed connector JARs.
+When absent, the connector bundle is resolved from the local `connectorsLocation` directory instead.
+When set to a name that does not match any entry in `remoteConnectorServers` or `remoteConnectorServersGroups`, the connector facade cannot be initialised; all operations on this connector return `ServiceUnavailableException` at runtime.
+
+`configurationProperties`::
+Connector-specific key/value properties passed directly to the connector.
+The available keys are connector-dependent.
+To discover them, call `createCoreConfig` (see <<system-actions>>) with a request body containing a `connectorRef` object; the response includes a `configurationProperties` map with key names and type metadata that can be copied into the configuration file.
+For the full annotated schema including per-operation option names, call `createFullConfig` with a body containing both `connectorRef` and an (initially empty) `configurationProperties` object.
+
+`poolConfigOption`::
+Connection pool settings for the connector instance.
+When this block is omitted, the ICF framework's own defaults apply unchanged.
+The example values shown in the configuration skeleton (10 / 10 / 150000 / 120000 / 1) are illustrative; the actual ICF framework defaults may differ.
+To obtain the true defaults for a specific connector, call `createCoreConfig` (see <<system-actions>>); the returned skeleton includes a `poolConfigOption` block populated with the ICF framework defaults for that connector.
++
+`maxObjects`:::
+Maximum total number of objects (idle + active) in the pool.
+`maxIdle`:::
+Maximum number of idle objects to keep in the pool.
+`maxWait`:::
+Maximum wait time in milliseconds for a pooled connection before an error is thrown.
+`minEvictableIdleTimeMillis`:::
+Minimum time in milliseconds an idle connection must remain in the pool before becoming eligible for eviction.
+`minIdle`:::
+Minimum number of idle connections to maintain.
+
+`operationTimeout`::
+Per-operation timeouts in milliseconds.
+`-1` means no timeout.
+Recognised keys: `CREATE`, `UPDATE`, `DELETE`, `SEARCH`, `SYNC`, `TEST`, `AUTHENTICATE`, `SCHEMA`, `VALIDATE`, `SCRIPT_ON_CONNECTOR`, `SCRIPT_ON_RESOURCE`, `GET`, `RESOLVEUSERNAME`.
+Keys not in this set are never read and have no effect.
+
+`resultsHandlerConfig`::
+Controls the ICF results handler chain applied to search results returned by the connector.
+When this block is omitted, the ICF framework's own defaults for each field apply.
+To discover the effective defaults for a specific connector, call `createCoreConfig` (see <<system-actions>>); the returned skeleton includes a `resultsHandlerConfig` block populated with the ICF framework defaults.
++
+`enableNormalizingResultsHandler`:::
+When `true`, attribute names in search results are normalised to the IDM-side names defined in `objectTypes` before being returned.
+`enableFilteredResultsHandler`:::
+When `true`, Wren:IDM applies the requested filter expression in-memory after receiving all results from the connector.
+Disable this only when the connector natively supports the filter expression, to avoid fetching the full result set from the remote system.
+`enableCaseInsensitiveFilter`:::
+When `true`, attribute comparisons in the IDM-side filtered results handler are performed case-insensitively.
+Has no effect when `enableFilteredResultsHandler` is `false`.
+`enableAttributesToGetSearchResultsHandler`:::
+When `true`, search results are trimmed to include only the attributes explicitly requested by the query; unrequested attributes are removed after the connector returns them.
+
+`syncFailureHandler`::
+Retry and error strategy for live sync delta processing; see <<live-sync>>.
+
+`objectTypes`::
+Schema for each connector object type.
+See <<object-types>>.
+
+`operationOptions`::
+Per-operation access control and option definitions.
+See <<operation-options>>.
+
+`systemActions`::
+Named script actions that can be invoked on the connector or target resource.
+See <<system-actions-per-connector>>.
+
+
+[#object-types]
+== Object types
+
+The `objectTypes` map defines the schema for each object class exposed by the connector.
+This field is optional.
+When absent, the map defaults to empty and the service activates with only the automatically-added ICF `__ALL__` handler; no specific object class routes are registered.
+Keys are IDM-side names chosen by the operator (e.g. `account`, `group`); these names have no special meaning in the provisioner code.
+The ICF `ObjectClass` identity is determined entirely by `nativeType`.
+
+.Example `objectTypes` entry
+[source,json]
+----
+{
+  "objectTypes": {
+    "account": {
+      "$schema": "http://json-schema.org/draft-03/schema",
+      "id": "__ACCOUNT__",
+      "type": "object",
+      "nativeType": "__ACCOUNT__",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "nativeName": "__NAME__",
+          "nativeType": "string"
+        },
+        "password": {
+          "type": "string",
+          "nativeName": "__PASSWORD__",
+          "nativeType": "JAVA_TYPE_GUARDEDSTRING",
+          "flags": [ "NOT_READABLE", "NOT_RETURNED_BY_DEFAULT" ]
+        }
+      }
+    }
+  }
+}
+----
+
+Each object type entry:
+
+`$schema`::
+JSON schema dialect.
+Always `http://json-schema.org/draft-03/schema`.
+This field is not read by the ICF provisioner; it is present by JSON Schema convention and has no functional effect.
+Omitting it does not cause an error.
+
+`type`::
+Always `"object"` for top-level object type entries.
+This field is not read by the ICF provisioner code; include it to satisfy JSON Schema draft-03 conventions.
+
+`id`::
+Serves as the JSON Schema draft-03 `$id` identifier for this object type entry.
+The ICF provisioner does not read this field; set it to the same ICF `ObjectClass` name as `nativeType` to satisfy JSON Schema convention (e.g. `__ACCOUNT__`).
+
+`nativeType`::
+ICF `ObjectClass` name at the connector level.
+This is the field actually read by the ICF provisioner code to identify the connector object class; `id` and `nativeType` must carry the same value.
+
+`properties`::
+Map of IDM-side attribute names to attribute schema definitions.
+
+Each attribute entry:
+
+`type`:::
+JSON schema type or Java type constant.
+Common values: `string`, `boolean`, `integer`, `JAVA_TYPE_GUARDEDSTRING`, `JAVA_TYPE_GUARDEDBYTEARRAY`.
+
+`nativeName`:::
+The ICF attribute name on the target system (e.g. `__NAME__`, `__PASSWORD__`, `cn`, `sAMAccountName`).
+
+`nativeType`:::
+Java type used for ICF serialisation.
+
+`flags`:::
+Optional array of modifier flags.
+When the `flags` array is absent or empty, the attribute is updateable, creatable, readable, returned by default, single-valued, and optional.
+Available flag values:
+
+`NOT_CREATABLE`:::: Cannot be set during object creation.
+`NOT_UPDATEABLE`:::: Cannot be modified after creation.
+`NOT_READABLE`:::: Cannot be read from the target system.
+`NOT_RETURNED_BY_DEFAULT`:::: Not included in results unless explicitly requested.
+`MULTIVALUED`:::: Holds a list of values rather than a single value.
+`PASSWORD`:::: Marks the attribute as a credential value.
+`NOT_QUERYABLE`:::: Cannot be used in query filter expressions.
+`AUDITED`:::: Value is included in audit log entries.
+`STORE_IN_REPOSITORY`:::: Value is persisted in the Wren:IDM repository.
+`IGNORE`:::: Defined in the schema but not passed to the connector.
+`REMOTE`:::: Value is generated externally and must be read back before being sent to the resource.
+
+
+[#operation-options]
+== Operation options
+
+The `operationOptions` map controls whether specific ICF operations are permitted and what additional options are passed to the connector.
+Keys are ICF operation names.
+The valid key set is the same as for `operationTimeout`: `CREATE`, `UPDATE`, `DELETE`, `SEARCH`, `SYNC`, `TEST`, `AUTHENTICATE`, `SCHEMA`, `VALIDATE`, `SCRIPT_ON_CONNECTOR`, `SCRIPT_ON_RESOURCE`, `GET`, `RESOLVEUSERNAME`.
+
+.Example (illustrative) — deny DELETE on accounts, scope a SEARCH restriction to `account`
+[source,json]
+----
+{
+  "operationOptions": {
+    "DELETE": {
+      "denied": true,
+      "supportedObjectTypes": [ "account" ]
+    },
+    "SEARCH": {
+      "denied": false,
+      "supportedObjectTypes": [ "account" ]
+    }
+  }
+}
+----
+
+Each entry accepts:
+
+`denied`::
+When `true`, the operation is blocked and returns an error to the caller.
+Default: `false`.
++
+WARNING: `denied: true` has no effect unless `supportedObjectTypes` is also present on the same entry.
+When `supportedObjectTypes` is absent, the denied check is not evaluated and the operation proceeds as if no `operationOptions` entry existed for that key — no restriction is applied.
+
+`supportedObjectTypes`::
+List of IDM-side object type names (keys from `objectTypes`) to which this entry applies.
+When present, the `denied` check and `operationOptionInfo` options are scoped to the listed types.
+When absent, the `denied` check is never evaluated (regardless of the `denied` value), and `operationOptionInfo` options apply to all object types.
+
+`operationOptionInfo`::
+JSON schema (draft-03) describing additional ICF `OperationOptions` properties to include when this operation is invoked.
+Valid option names are connector-specific.
+To discover them, call the `createFullConfig` action (see <<system-actions>>), which returns an annotated configuration skeleton that includes the `operationOptions` schema for the connector.
+The defined options are applied automatically by the provisioner from the connector configuration on each invocation; callers do not pass them explicitly in the HTTP request.
+
+
+[#resource-paths]
+== Resource paths and operations
+
+System objects are addressed at:
+
+ /system/<name>/<objectType>/<id>
+
+where `<name>` is the value of the provisioner's `name` field, `<objectType>` is a key from `objectTypes`, and `<id>` is the object identifier (URL-encoded when it contains special characters such as `/` or `+`).
+
+NOTE: The `system/` prefix is optional.
+Both `system/ldap/account/jdoe` and `ldap/account/jdoe` are accepted as identifiers.
+
+The `ObjectClassResourceProvider` handles CREST requests for a given object type and delegates each operation to the corresponding ICF API operation:
+
+* Create → `CreateApiOp`
+* Read → `GetApiOp`
+* Update → `UpdateApiOp`
+* Delete → `DeleteApiOp`
+* Patch → `UpdateApiOp`
+* Query → `SearchApiOp`
+
+Operations not supported by the connector return `NotSupportedException`.
+An operation blocked by `denied: true` in `operationOptions` also returns an error.
+
+The `authenticate` action on an object instance verifies a credential against the connector via `AuthenticationApiOp`.
+The action requires `username` and `password` as request additional parameters (HTTP query parameters).
+For example: `POST /openidm/system/ldap/account?_action=authenticate&username=jdoe&password=secret`
+On success it returns the connector `Uid` of the authenticated object.
+
+Update and patch operations support a separate re-authentication mechanism: if the request includes a `X-OpenIDM-Reauth-Password` HTTP header, the provisioner reads the username from the request body attribute named by the first entry of `configurationProperties.accountUserNameAttributes`, then verifies the credential via `AuthenticationApiOp` before applying the change.
+
+NOTE: `X-OpenIDM-Reauth-Password` is the literal HTTP header name; use it exactly as shown when making direct HTTP requests.
+
+NOTE: When `denied: true` is set in `operationOptions` for an operation **and `supportedObjectTypes` is also configured**, the denied check runs before re-authentication is attempted.
+In that case, `getConnectorFacade0()` throws `ForbiddenException` immediately; the `X-OpenIDM-Reauth-Password` header is never evaluated.
+When `supportedObjectTypes` is absent (the default), the `denied: true` flag is not evaluated by this code path and the operation is not blocked.
+
+
+[#system-actions]
+== System-level actions
+
+Actions are invoked on the `/system` singleton (`SystemObjectSetService`) via a CREST action request.
+
+`test`::
+Returns connection status for all active provisioner instances as a JSON array.
+To test a single named system, include `id` as a field in the request body (e.g. `{ "id": "ldap" }`); the response is then a single status object rather than an array.
+Each status object contains: `name` (system name), `enabled` (boolean), `config` (config path), `connectorRef`, `objectTypes` (list of configured type names), `ok` (boolean connection success), and an `error` field when the connection fails.
+The per-connector `test` action (see <<per-connector-actions>>) returns this same object for a single connector instance.
+
+`testConfig`::
+Tests a connector configuration payload without persisting it.
+The request body must be a full connector configuration including a `name` field.
+
+`liveSync` / `activeSync`::
+Triggers live sync for a specific object type.
+Requires a `source` query parameter in the form `system/<name>/<objectType>` (e.g. `?source=system/ldap/account`).
+The optional boolean query parameter `detailedFailure` controls whether the `syncDelta` field is included inside the `lastException` object of the action response body.
+When `false` (the default), the `syncDelta` field is removed from `lastException` before the response is returned.
+When `true`, the full `syncDelta` object is retained in `lastException`.
+
+`availableConnectors`::
+Lists all connector types available through the active Connector Info Provider.
+
+`createConfiguration`::
+Multi-phase configuration wizard invoked as `POST /system?_action=createConfiguration`.
++
+Phase 1 — empty request body::: Returns a list of available connectors.
+Phase 2 — body contains `connectorRef` but no `configurationProperties`::: Generates the core configuration skeleton for the selected connector.
+Phase 3 — body contains both `connectorRef` and `configurationProperties`::: Validates and returns the full configuration.
++
+When the connector type is already known, `createCoreConfig` and `createFullConfig` perform phases 2 and 3 directly without requiring the phase-1 connector listing step.
+
+`createCoreConfig`::
+Single-call equivalent of phase 2 of `createConfiguration` (generates the core configuration skeleton).
+Endpoint: `POST /system?_action=createCoreConfig`.
+The request body must be a JSON object containing a `connectorRef` object (with `bundleName`, `bundleVersion`, and `connectorName`); `configurationProperties` must be absent or null.
++
+.Example request body
+[source,json]
+----
+{
+  "connectorRef": {
+    "bundleName": "org.forgerock.openicf.connectors.ldap-connector",
+    "bundleVersion": "[1.4.0.0,1.5.0.0)",
+    "connectorName": "org.identityconnectors.ldap.LdapConnector"
+  }
+}
+----
+
+`createFullConfig`::
+Single-call equivalent of phase 3 of `createConfiguration` (validates and returns the full annotated configuration).
+Endpoint: `POST /system?_action=createFullConfig`.
+The request body must contain both `connectorRef` and a `configurationProperties` object (may be the map returned by `createCoreConfig`, populated with actual values).
+
+
+[#per-connector-actions]
+== Per-connector actions
+
+Actions can be invoked directly on a connector instance at `/system/<name>`.
+
+`test`::
+Tests the connection for this specific connector and returns its status object.
+
+`livesync`::
+Triggers live sync for this connector instance, equivalent to calling the `liveSync` system action with this connector as the source.
+The action name at the per-connector endpoint is `livesync` (all lowercase); at the system-level endpoint the equivalent action is `liveSync` (camelCase).
+Both names are resolved case-insensitively via `getActionAsEnum()`; any casing variant (e.g. `LIVESYNC`, `LiveSync`) is accepted by either endpoint.
+
+`script`::
+Executes a named system action defined in `systemActions`.
+See <<system-actions-per-connector>>.
+
+
+[#live-sync]
+== Live sync
+
+Live sync captures changes that occurred on the external system since the last invocation and delivers them to Wren:IDM.
+Not all connectors support live sync; support depends on the connector implementing `SyncApiOp`.
+
+On each invocation, the provisioner reads a sync _stage_ object from `repo/synchronisation/pooledSyncStage`.
+The stage ID is derived from the source path by removing all `/` characters and uppercasing the result (for example, `system/ldap/account` becomes `SYSTEMLDAPACCOUNT`).
+The previous stage is passed to `ProvisionerService.liveSynchronize()`, and the returned updated stage is written back to the repository.
+On the first invocation for a given source, no stage record exists in the repository; `null` is passed as the stage to the connector's sync API.
+When the connector receives a `null` sync token it determines its own starting point; behavior is connector-specific and is not controlled by Wren:IDM.
+
+The scheduler can trigger live sync automatically.
+Set the scheduler job's `invokeService` to `"provisioner"` and place `action` and `source` in the `invokeContext` block.
+
+.Example live sync scheduler job (`schedule-liveSync-ldap.json`)
+[source,json]
+----
+{
+  "enabled": true,
+  "type": "cron",
+  "schedule": "0/15 * * * * ?",
+  "persisted": true,
+  "invokeService": "provisioner",
+  "invokeContext": {
+    "action": "liveSync",
+    "source": "system/ldap/account"
+  }
+}
+----
+
+The `invokeContext` fields are:
+
+`action`::
+Must be `"liveSync"` (or `"activeSync"`, which is a recognised alias at the system-level endpoint).
+The value is resolved case-insensitively via `Utils.asEnum`; `"livesync"`, `"LIVESYNC"`, and `"liveSync"` are all accepted.
+Use `"liveSync"` (camelCase) as the canonical form to match the system-level action name.
+
+`source`::
+Resource path in the form `system/<name>/<objectType>` identifying the object type to sync.
+
+
+=== Sync failure handling
+
+The `syncFailureHandler` object in the connector configuration controls what happens when processing a sync delta fails.
+
+.`syncFailureHandler` configuration
+[source,json]
+----
+{
+  "syncFailureHandler": {
+    "maxRetries": 5,
+    "postRetryAction": "dead-letter-queue"
+  }
+}
+----
+
+`maxRetries`::
+Number of retry attempts before invoking `postRetryAction`.
+`-1` or absent means retry indefinitely — `postRetryAction` is never called.
+`0` means call `postRetryAction` immediately on first failure without retrying.
+
+`postRetryAction`::
+Action taken when retries are exhausted.
+Accepts a string shorthand or a script object:
++
+`"dead-letter-queue"`::: Persists the failed sync delta to `repo/synchronisation/deadLetterQueue/<systemIdentifier>/<token>`.
+The stored document contains the following top-level fields: `token` (the sync token value, also used as the resource ID), `systemIdentifier` (the connector name, also used as the sub-path), `objectType` (the object type being synced), `uid` (the ICF UID of the affected object), `failedRecord` (the connector object payload at the time of failure, if available), and `failureCause` (the exception message string).
+Query or drain the queue via the standard repository API at that path.
+`"logged-ignore"`::: Logs the failure and discards the delta.
+`{ "script": { ... } }`::: Calls a custom script.
+The inner `script` object uses the standard Wren:IDM script registry format: set `"type"` to the language identifier (e.g. `"groovy"`, `"javascript"`) and supply the script body via `"source"` (inline text) or `"file"` (path to a script file).
+The script receives the following bindings: `context` (request context), `syncFailure` (map with keys `token`, `systemIdentifier`, `objectType`, `uid`, and `failedRecord`), `failureCause` (the exception that caused the failure), and `failureHandlers` (a map with pre-built `"loggedIgnore"` and `"deadLetterQueue"` handler instances the script can delegate to).
+
+NOTE: When `syncFailureHandler` is absent from the configuration, the default behaviour is to retry indefinitely — equivalent to setting `maxRetries: -1`.
+
+
+[#system-actions-per-connector]
+== Script system actions
+
+The `systemActions` list defines named scripts that execute on the connector or the target resource via the `script` action at `/system/<name>`.
+
+.Example `systemActions` entry
+[source,json]
+----
+{
+  "systemActions": [
+    {
+      "scriptId": "resetPassword",
+      "actions": [
+        {
+          "systemType": "provisioner.openicf.*",
+          "actionType": "Groovy",
+          "actionSource": "// Groovy script body"
+        }
+      ]
+    }
+  ]
+}
+----
+
+`scriptId`::
+The action name, passed as the `scriptId` query parameter when invoking the `script` action at `/system/<name>`.
+For example: `POST /system/ldap?_action=script&scriptId=resetPassword`.
+Required.
+
+`actions`::
+List of system type–specific script entries.
+The `systemType` value is matched as a regular expression against the provisioner type string (e.g. `provisioner.openicf`).
+Required.
+
+`systemType`:::
+Regular expression matched against the provisioner type.
+Required.
+
+`actionType`:::
+Script language identifier (e.g. `Groovy`, `JavaScript`).
+Required.
+
+`actionSource`:::
+Inline script text.
+Mutually exclusive with `actionFile`.
+
+`actionFile`:::
+Path to a script file, resolved against the Wren:IDM project root.
+Mutually exclusive with `actionSource`.
+When both are present, `actionFile` takes precedence and `actionSource` is ignored.
