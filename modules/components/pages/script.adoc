@@ -255,7 +255,7 @@ Additional CREST query parameters such as `_pageSize`, `_pagedResultsOffset`, `_
 To limit the returned fields, use the `fieldFilter` positional parameter (preferred); alternatively, include `_fields` in `params` — `_fields` is used only when `fieldFilter` is not provided, so if both are present `fieldFilter` takes precedence.
 
 | `openidm.action(resourceName, actionId, content, params[, fieldFilter[, context]])`
-| Invokes an action; returns the action result.
+a| Invokes an action; returns the action result.
 Three calling forms are available:
 
 * `openidm.action(resourceName, content, params[, fieldFilter[, context]])` — 3-argument form; `actionId` is read from `params._action`.
@@ -419,7 +419,7 @@ The endpoint script receives the request bindings described in <<_request_bindin
 For resource operations (read, create, update, patch, delete), returning `null` produces `404 Not Found`; any other return value produces `200 OK` with the value as the response body.
 For action operations, any return value including `null` produces `200 OK`.
 For query operations, the script may return:
-+
+
 --
 * A flat list — each element becomes a result entry; no pagination metadata.
 * A map with a `result` key — `result` is required and must be a list of result entries.
@@ -427,7 +427,7 @@ For query operations, the script may return:
   A map that is not null and does not contain a `result` key causes a `500 Internal Server Error`.
 * `null` — use callback-based result streaming by calling `callback.handleResource(...)` directly from within the script.
 --
-+
+
 To raise a typed HTTP status from a script, throw a plain object with `code` and `message` fields:
 `throw { "code": 403, "message": "Forbidden" };`.
 This is the pattern used by the shipped `router-authz.js` filter and is the recommended approach for both JavaScript and Groovy endpoint scripts.
