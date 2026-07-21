@@ -1,3 +1,305 @@
 = Workflow
 
-NOTE: TBD: Workflow configuration, process definition, process instance management, tasks management
+_Workflow_ runs BPMN 2.0 process definitions on an embedded Flowable process engine and exposes process definitions, running/historic process instances, tasks, and dead-letter jobs as CREST resources.
+
+OSGi service class:: `org.wrensecurity.wrenidm.workflow.flowable.impl.FlowableServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.workflow`
+Configuration file:: `workflow.json`
+Router mapping:: `/workflow*`
+
+`FlowableServiceImpl` itself only proxies CREST requests to an inner `FlowableResource` request handler once the process engine has started; the actual per-resource behavior is implemented by six cooperating resource classes described in <<workflow-rest-api>>.
+Two other integrations shape how workflows behave in Wren:IDM and are covered separately below: user/group identity is resolved against `managed/user` and `managed/role` rather than Flowable's own identity tables (<<workflow-identity>>), and BPMN scripts/expressions can call into the Wren:IDM script registry and OSGi services (<<workflow-scripting>>).
+
+
+[[workflow-engine-configuration]]
+== Engine Configuration
+
+.Default `conf/workflow.json`
+[source,json]
+----
+{
+    "useDataSource" : "default",
+    "workflowDirectory" : "&{launcher.project.location}/workflow"
+}
+----
+
+This block illustrates every configurable key, including ones with no Wren:IDM-applied default (`history`, `mail.username`, `mail.password`), shown here with an example value only; it is not a recommended or default configuration in its own right.
+
+.`conf/workflow.json` (full schema)
+[source,json]
+----
+{
+    "location" : "embedded",
+    "useDataSource" : "default",
+    "workflowDirectory" : "workflow",
+    "tablePrefix" : "",
+    "tablePrefixIsSchema" : false,
+    "history" : "audit",
+    "mail" : {
+        "host" : "localhost",
+        "port" : 25,
+        "username" : "mailUser",
+        "password" : "mailPassword",
+        "starttls" : false
+    },
+    "engine" : {
+        "url" : "",
+        "username" : "",
+        "password" : ""
+    }
+}
+----
+
+`location`::
+Where the process engine instance comes from.
+Type: String (`embedded`, `local`).
+Default: `embedded`.
++
+`embedded`::: The service builds and starts its own `StandaloneProcessEngineConfiguration` (see below).
+`local`::: The service binds to an externally-registered `ProcessEngine` OSGi service instead of starting its own, using the reference target filter `(!(wrenidm.flowable.engine=true))`: any `ProcessEngine` service that does not carry that property is eligible.
+Wren:IDM does not itself register any other `ProcessEngine` service, so a different bundle must publish one for `local` to have anything to bind to.
+The reference is optional, so the service still activates when no matching engine is present; it is just left unable to serve workflow requests until one registers.
+Requests against `/workflow/*` return `500 Internal Server Error` while unbound.
++
+NOTE: The engine-location enum also declares a `remote` value and the schema declares `engine/url`, `engine/username`, and `engine/password` keys; none of these are functional: setting `location` to `remote` throws `InvalidException` at activation, and `engine/*` is never read by `parseConfiguration`.
+Do not configure either.
+
+Except for `location` itself, every field below is parsed from configuration regardless of the value of `location`, but only applied when `location` is `embedded`; the `local` branch uses the externally-bound engine as-is and reads none of them.
+
+`useDataSource`::
+Name of the `DataSourceService` instance (matched by its `config.factory-pid`-derived key) that backs the embedded engine's tables (the same xref:repository.adoc[Repository] JDBC data source service used elsewhere in Wren:IDM).
+Type: String.
+Default: `default`.
+A name that does not match any bound `DataSourceService` causes `IllegalStateException` at first database access.
+
+`workflowDirectory`::
+Directory watched for deployable process archives; see <<workflow-deployment>>.
+Type: String.
+Default: `workflow` when the key is absent from configuration entirely.
+The shipped `conf/workflow.json` sets it explicitly to `&{launcher.project.location}/workflow` instead: a launcher-level substitution token that resolves to the Wren:IDM project instance directory (see the default configuration block above).
+
+`tablePrefix` / `tablePrefixIsSchema`::
+Passed straight through to `StandaloneProcessEngineConfiguration.setDatabaseTablePrefix` / `setTablePrefixIsSchema`.
+Type: String / Boolean.
+Default: `""` / `false`.
+
+`history`::
+Flowable history level: `none`, `instance`, `task`, `activity`, `audit`, or `full`.
+Type: String.
+No default is applied by Wren:IDM; when absent, Flowable's own engine default of `audit` applies unchanged.
+Wren:IDM does not validate the configured value before it reaches the engine: it is read as a plain string with no allow-list or enum check (unlike `location`, which is parsed against a fixed enum), so an unrecognized value is passed through unvalidated rather than being rejected or defaulted.
+
+`mail`::
+Outbound mail server settings passed to the embedded engine's mail task support.
+Type: Object.
++
+`host`::: Type: String. Default: `localhost`.
+`port`::: Type: Integer. Default: `25`.
+`username` / `password`::: Type: String. No default; `password` is encrypted at rest (see below).
+`starttls`::: Type: Boolean. Default: `false`.
+
+`ConfigMeta` marks `mail/password` (and the non-functional `engine/password`) as sensitive fields, so any value stored under either key is encrypted automatically when the configuration is written.
+
+
+[[workflow-deployment]]
+== Process Deployment
+
+When `location` is `embedded` and a `ConfigurationAdmin` service is available, activation registers an Apache Felix File Install factory configuration that watches the directory named by `workflowDirectory` (resolved via `IdentityServer.getFileForInstallPath`) for files matching `.bar` or `.xml`, polling every 2000 ms and starting newly-installed bundles automatically.
+The poll interval is hardcoded at 2000 ms; it is not read from configuration and cannot be changed.
+
+Dropping a BAR (Business Archive) or a bare BPMN XML file into that directory deploys it to the running process engine without a restart.
+Files already present in the directory at first startup deploy on the initial poll the same way; there is no separate baseline-only first-run behavior.
+Removing a previously-deployed file from that directory undeploys it automatically on the next poll cycle (governed by Apache Felix File Install's own semantics, not Wren:IDM's).
+On deactivation, the File Install configuration is deleted so the directory is no longer watched.
+
+The service also registers the running `ProcessEngine` itself as an OSGi service (tagged `wrenidm.flowable.engine=true`) so that deployment tooling built on top of the Flowable OSGi integration can reach it; the service's own `ProcessEngine` reference explicitly excludes services carrying that tag to avoid binding to itself.
+
+
+[[workflow-rest-api]]
+== REST API
+
+`FlowableResource` routes seven paths under `/workflow` to six resource classes.
+
+[cols="2,3"]
+|===
+|Path |Resource class
+
+|`/workflow/processdefinition`
+|`ProcessDefinitionResource`
+
+|`/workflow/processdefinition/{procdefid}/taskdefinition`
+|`TaskDefinitionResource`
+
+|`/workflow/processinstance`
+|`ProcessInstanceResource` (unfinished instances only)
+
+|`/workflow/processinstance/history`
+|`ProcessInstanceResource` (all instances, finished and unfinished)
+
+|`/workflow/taskinstance`
+|`TaskInstanceResource`
+
+|`/workflow/taskinstance/history`
+|`TaskInstanceHistoryResource`
+
+|`/workflow/job/deadletter`
+|`DeadLetterJobEntityResource`
+|===
+
+Every query on these resources requires a `_queryId` of either `ALL_IDS` (list everything) or `filtered-query` (apply the request's additional parameters and sort keys); any other query ID returns a `BadRequestException`.
+Task Definitions is the sole exception to this: it accepts only `ALL_IDS` and rejects `filtered-query` outright (see the Task Definitions subsection below).
+
+=== Process Definitions
+
+`GET /workflow/processdefinition` (`filtered-query`) accepts the following additional parameters:
+
+* `deploymentId`
+* `category` (also `categoryLike`)
+* `_id` (the process definition ID)
+* `key` (also `keyLike`)
+* `name` (also `nameLike`)
+* `processDefinitionResourceName` (also `processDefinitionResourceNameLike`)
+* `version`
+
+Every process definition response, from both the single-item read and the collection query, includes its own `deploymentId` field, so a reader can discover valid filter values from any prior response rather than needing outside knowledge of Flowable's internal deployment ID scheme.
+
+Reading a single process definition adds start-form data when the process declares a start form key: the form key itself, the raw form template resource, and the resolved form property handlers (id, expressions, type, readable/required/writable flags).
+Requesting the `diagram` field (`_fields=diagram`) additionally returns the process diagram image as a base64-encoded string, if the deployment includes one.
+
+This resource does not support `_sortKeys`: `queryCollection` calls Flowable's `query.list()` directly with no sort-key handling of any kind, unlike every other resource on this page (`ProcessInstanceResource`, `TaskInstanceResource`, `TaskInstanceHistoryResource`, and `DeadLetterJobEntityResource` all implement their own `applySortKeys` method; this resource has none).
+A `_sortKeys` parameter supplied on this resource's queries is therefore silently ignored rather than rejected or applied.
+
+Deleting a process definition undeploys it (`cascade=false`).
+A `PersistenceException` from the underlying store (for example, when running instances still reference the definition) is translated to a `409 Conflict`.
+Create, update, and patch are not supported on this resource.
+
+=== Task Definitions
+
+`GET /workflow/processdefinition/{procdefid}/taskdefinition` lists every BPMN `UserTask` element in the given process definition, each with its form key and form property handlers attached.
+This resource does not support `filtered-query`: `queryCollection` accepts only `_queryId=ALL_IDS` and rejects any other value, including `filtered-query`, with a `BadRequestException` ("Unknown query-id").
+Unlike every other resource on this page, it therefore has no additional filter parameters or `_sortKeys` support to document; the query above always returns the full, unfiltered, unsorted list of `UserTask` elements for the given process definition.
+Reading a single task definition by its BPMN element ID returns the same shape for that one task, or `NotFoundException` if no matching `UserTask` exists in the process.
+This resource is read-only: create, update, delete, and instance-level action are all unsupported.
+
+=== Process Instances
+
+`POST /workflow/processinstance` starts a new process instance, either by process key (`_key`) or by a specific process definition ID (`_processDefinitionId`); an optional `_businessKey` is also accepted.
+When both `_key` and `_processDefinitionId` are supplied, `_processDefinitionId` takes precedence: `createInstance` starts the instance via `startProcessInstanceById`, and the supplied `_key` value is extracted from the request but never used.
+Only when `_processDefinitionId` is absent does `_key` take effect, via `startProcessInstanceByKey`.
+When neither is supplied, `_key` resolves to `null` and is passed through to `startProcessInstanceByKey` as-is; what the underlying Flowable engine does with a `null` process key in that case is engine-internal behavior and is not asserted here, the same evidentiary boundary applied to the `migrate` and `claim` actions elsewhere on this page.
+The remaining request body becomes the initial process variables.
+Every started instance also receives an internal `openidmcontext` variable carrying a copy of the caller's security context (authentication ID and authorization); scripts and expressions inside the process use it to act with the starting user's identity (see <<workflow-scripting>>).
+This variable is stripped back out of every variable listing and read response before it reaches the REST caller.
+
+`GET /workflow/processinstance` lists only unfinished instances; `GET /workflow/processinstance/history` lists all historic instances regardless of completion.
+Both routes are served by the same `ProcessInstanceResource` class, constructed with a different history query (`unfinished()` vs. no filter); every other operation (create, read, update, delete, action) behaves identically no matter which of the two paths was used to reach it.
+
+`filtered-query` accepts the following additional parameters:
+
+* `processDefinitionId` / `processDefinitionKey`
+* `processInstanceBusinessKey`
+* `processInstanceId`
+* `superProcessInstanceId`
+* `businessStatus`
+* `finished` / `unfinished` flags
+* `involvedUserId` and `startUserId`
+* `startedAfter`/`startedBefore`/`finishedAfter`/`finishedBefore` ISO-8601 timestamps
+* `var-<name>=<value>` parameters that match against process variable values by exact equality (Flowable's `variableValueEquals` query)
+
+Unlike `_businessKey`, `businessStatus` cannot be set through this resource at all.
+`createInstance` extracts only `_key`, `_processDefinitionId`, and `_businessKey` from the request; `updateInstance` unconditionally returns a not-supported error; and the resource's only instance action, `migrate`, does not touch it either.
+A running instance's business status can therefore only originate from the process itself, through the embedded Flowable engine's own API, never through this REST resource.
+
+Sortable keys are `processInstanceId`, `processDefinitionId`, `processInstanceBusinessKey`, `startTime`, `endTime`, `durationInMillis`, and `tenantId`.
+
+Reading a single instance includes its non-context process variables and the list of historic tasks that ran under it.
+Requesting the `diagram` field additionally renders a base64-encoded PNG diagram (the same encoding used for the process-definition diagram) with the process instance's currently active activities highlighted, if the deployed process definition has a graphical BPMN notation; otherwise the `diagram` field is silently omitted rather than causing an error.
+
+Deleting an instance (`DELETE`, addressable from either path) cancels the running process via `RuntimeService.deleteProcessInstance`, recording the deletion reason `"Deleted by Wren:IDM."`, and returns the instance's last known historic state.
+
+The `migrate` action (no request body) moves a running instance onto the process definition returned by Flowable's `latestVersion()` query for the same process definition key; it rejects the request if no instance or no later definition exists, or if the instance is already on the latest version.
+All three rejection cases return a `BadRequestException` (each with a distinct message), so a caller can treat any `400` response from this action as one of those three named conditions; a failure during the migration call itself instead returns a generic `InternalServerErrorException`.
+
+=== Task Instances
+
+`GET /workflow/taskinstance` (`filtered-query`) accepts the following additional parameters:
+
+* `executionId`
+* `processDefinitionId` / `processDefinitionKey`
+* `processInstanceId`
+* `assignee`
+* `taskId` / `name` / `owner` / `description` / `priority`
+* `taskCandidateGroup` (comma-separated for multiple groups; see <<workflow-identity>> for a caveat on what these IDs actually reference)
+* `taskCandidateUser`
+* `taskCandidateOrAssigned` (a user ID, matched against either the assignee or the task's candidates)
+* `unassigned` (boolean flag string; only the value `true`, case-insensitive, activates the filter)
+* `tenantId`
+* `var-<name>` process-variable filters, matched by exact equality (Flowable's `processVariableValueEquals` query)
+
+Supplying multiple comma-separated groups to `taskCandidateGroup` matches a task if it is a candidate for any one of the listed groups, not only if it is a candidate for all of them.
+
+Sortable keys are `_id`, `name`, `description`, `priority`, `assignee`, `processInstanceId`, `executionId`, `createTime`, `dueDate`, and `tenantId`.
+
+Reading a task adds its form properties, current variables (`openidmcontext` excluded), the assignee (or, when a delegation is pending, the delegate instead), and its candidate users/groups.
+This resource has no way to place a task into delegation itself (`DelegationState.PENDING` is only ever read here, never set), so a task only reaches that state through the BPMN process definition or the Flowable engine directly.
+Updating a task can change `assignee`, `description`, `name`, and `owner`; other fields are ignored.
+Deleting a task accepts an optional `deleteReason` additional parameter.
+
+Two instance actions are supported: `claim` (body: `{ "userId": "..." }`) assigns the task to that user, and `complete` (body: process variables to set) finishes the task, propagating local variables to the parent scope.
+`claim` calls Flowable's `TaskService.claim(resourceId, userId)` directly; wrenidm's own code performs no check of the task's current assignee beforehand and has no separate branch for an already-assigned task.
+Whether `TaskService.claim` itself succeeds unconditionally or only on an unclaimed task is Flowable engine-internal behavior and is not asserted here; this is the same evidentiary boundary applied to the `migrate` action above.
+
+`GET /workflow/taskinstance/history` exposes the same task instances through Flowable's history API; it is query- and read-only: create, update, delete, and action all return `notSupportedOnInstance`/`notSupportedOnCollection`.
+`filtered-query` accepts the following additional parameters:
+
+* `executionId`
+* `processDefinitionId` / `processDefinitionKey`
+* `processInstanceId`
+* `assignee`
+* `taskCandidateGroup` (comma-separated)
+* `taskCandidateUser`
+* `taskId`
+* `taskName` (note: `name` on `TaskInstanceResource` above, not `taskName`)
+* `owner`
+* `description`
+* `finished`/`unfinished` and `processFinished`/`processUnfinished` flags
+* `priority`
+* `deleteReason`
+* `tenantId`
+* `var-<name>` (exact equality, via `processVariableValueEquals`)
+
+As with `TaskInstanceResource` above, supplying multiple comma-separated groups to `taskCandidateGroup` matches a task if it is a candidate for any one of the listed groups, not only if it is a candidate for all of them.
+
+Unlike `TaskInstanceResource`, `taskCandidateOrAssigned` and `unassigned` are not supported here.
+
+Sortable keys are `taskId`, `taskName`, `description`, `priority`, `assignee`, `processInstanceId`, `executionId`, `tenantId`, `_id` (maps to `orderByHistoricActivityInstanceId()`, a different sort than the `_id` key on `TaskInstanceResource`, which maps to `orderByTaskId()`), `processDefinitionId`, `durationInMillis`, `startTime`, `endTime`, `owner`, `dueDate`, `deleteReason`, and `taskDefinitionKey`.
+
+=== Dead Letter Jobs
+
+`GET /workflow/job/deadletter` lists jobs that exhausted their retry count, filterable by `jobId`, `executionId`, `processDefinitionId`, and `processInstanceId`, and sortable by `createTime`, `executionId`, `_id`, `processInstanceId`, and `retries`.
+Reading a single dead-letter job by ID returns its job representation, or `NotFoundException` if no such job exists.
+The `retry` action (no request body) moves a dead-letter job back to the executable job queue with one retry attempt.
+Create, update, delete, and collection-level action are not supported on this resource.
+
+
+[[workflow-identity]]
+== Identity Integration
+
+The embedded engine's identity component is replaced by `IdmIdentityService`, wired in through a custom `IdmEngineConfigurator`; it reads Flowable users from xref:managed.adoc[`managed/user`] and Flowable groups from `managed/role` instead of Flowable's own identity tables.
+Flowable's notion of a user's "ID" corresponds to the `managed/user` username, not the object's `_id`: a user lookup queries `managed/user` with the `for-userName` query and a `uid` parameter; a group (role) membership lookup instead reads the `authzMembers` relationship field of the matching `managed/role` entry.
+Looking up a user's groups reads the `authzRoles` relationship field of the matching `managed/user` entry via the same `for-userName` query; a plain group search without a member filter queries `managed/role` directly.
+
+Because of this, `taskCandidateUser`/assignee values are `managed/user` usernames.
+`taskCandidateGroup` values are the bare `_id` of whatever role object backs an entry in a user's `authzRoles` relationship.
+A direct group search (not scoped to a user) always queries `managed/role` only.
+However, `authzRoles` itself is schema-permitted to reference either `managed/role` or `repo/internal/role`, so a candidate group ID surfaced through a user's roles is not guaranteed to be a `managed/role` ID.
+This identity bridge is read-only: every write operation on the identity service (creating or saving users/groups, memberships, privileges, tokens, pictures, and user info) throws `UnsupportedOperationException`.
+
+
+[[workflow-scripting]]
+== Scripting and Expression Integration
+
+BPMN script tasks and listeners resolve an `openidm` script binding through a custom `ResolverFactory` (`IdmScriptResolverFactory`) that looks up a script from the xref:script.adoc[Wren:IDM script registry] using the script task's declared language (falling back to Groovy when the language cannot be determined), and constructs its bindings from a `FlowableContext` wrapping the process's `openidmcontext` security context variable.
+When a sub-execution has no `openidmcontext` of its own, it is copied down from its parent execution so nested scopes keep the same caller identity.
+
+BPMN expressions (EL) can additionally reference any bound OSGi `JavaDelegate` service by its component name, through a custom EL resolver (`IdmELResolver`) registered ahead of Flowable's default resolvers by `IdmExpressionManager`; delegates are bound and unbound dynamically as the corresponding OSGi services come and go.
