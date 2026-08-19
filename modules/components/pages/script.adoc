@@ -8,18 +8,22 @@ Configuration file:: `script.json`
 Router mapping:: `/script`
 
 Scripts run throughout Wren:IDM: synchronization mappings, managed-object hooks, policy rules, authentication chains, and scheduled tasks all delegate to this service.
-The service registers under four interfaces — `ScriptRegistry` (the in-memory registry of compiled scripts), `RequestHandler` (the `/script` endpoint), `ScheduledService` (script-triggered schedules), and `ScriptExecutor` (in-process invocation by other bundles).
-Custom REST endpoints are provided by a cooperating component, the Custom Endpoints Service, documented in <<_custom_endpoints,Custom endpoints>>.
+The service registers under four interfaces:
 
+* `ScriptRegistry`, the in-memory registry of compiled scripts.
+* `RequestHandler`, the `/script` endpoint.
+* `ScheduledService`, script-triggered schedules.
+* `ScriptExecutor`, in-process invocation by other bundles.
+
+A cooperating component, the Custom Endpoints Service, provides custom REST endpoints, documented in <<custom-endpoints,Custom endpoints>>.
 
 == Script engines
 
 Wren:IDM ships with two script engines, configured under the `ECMAScript` and `Groovy` blocks of `conf/script.json`.
 A script selects its engine through a `type` field:
 
-* `text/javascript` — JavaScript, evaluated by the bundled ECMAScript engine.
-* `groovy` — Groovy; Groovy source files use the `.groovy` extension.
-
+* `text/javascript`: JavaScript. The bundled ECMAScript engine evaluates it.
+* `groovy`: Groovy. Groovy source files use the `.groovy` extension.
 
 == Configuration
 
@@ -52,7 +56,7 @@ The script service is configured by `conf/script.json`.
 `properties`::
 Global variables published to every script.
 Each entry becomes a binding named by its key, available to all scripts regardless of engine.
-Values may be strings, numbers, booleans, objects, or arrays; they are passed through without type coercion.
+Values may be strings, numbers, booleans, objects, or arrays. They pass through without type coercion.
 In Groovy, JSON objects arrive as Java `Map` instances and arrays as Java `List` instances.
 In JavaScript, the ECMAScript engine wraps these Java objects transparently, so they behave as ordinary JavaScript objects and arrays.
 Type: object.
@@ -61,20 +65,20 @@ Default: empty.
 `ECMAScript`::
 Settings passed to the JavaScript engine.
 Type: object.
-Required — the service fails to activate if this block is absent (an empty object `{}` satisfies this requirement).
+Required. The service fails to activate if this block is absent (an empty object `{}` satisfies this requirement).
 
 `Groovy`::
 Settings passed to the Groovy engine.
 Type: object.
-Optional — if absent, the Groovy engine uses its built-in defaults.
+Optional. If absent, the Groovy engine uses its built-in defaults.
 
 `sources`::
 Named directories searched for script files referenced by name.
 Type: object.
 Default: the four entries shown above (`default`, `install`, `project`, `project-script`).
 
-NOTE: The reserved binding names `openidm`, `identityServer`, and `console` are ignored if declared under `properties`; they always refer to the built-in bindings described in <<_script_variables,Script variables>>.
-
+NOTE: The reserved binding names `openidm`, `identityServer`, and `console` are ignored if declared under `properties`.
+They always refer to the built-in bindings described in <<script-variables,Script variables>>.
 
 === JavaScript engine settings
 
@@ -82,12 +86,13 @@ NOTE: The reserved binding names `openidm`, `identityServer`, and `console` are 
 Minimum time in milliseconds that must elapse before a changed script is recompiled.
 Shipped value: `60000`.
 
-The service additionally injects `javascript.exception.debug.info` into the engine configuration, taken from the identity-server property of the same name and defaulting to `false`.
+The service also injects `javascript.exception.debug.info` into the engine configuration.
+This value comes from the identity-server property of the same name and defaults to `false`.
 When `true`, JavaScript exceptions include additional debug information such as file name and line number.
-The shipped `conf/boot/boot.properties` already contains this property set to `false`; to enable it, change the value to `true`:
+The shipped `conf/boot/boot.properties` already contains this property set to `false`.
+To enable it, change the value to `true`:
 
  javascript.exception.debug.info=true
-
 
 === Groovy engine settings
 
@@ -111,96 +116,118 @@ Shipped value: `true`.
 Minimum time in milliseconds before a changed Groovy script is recompiled.
 Shipped value: `60000`.
 
-NOTE: `&{...}` tokens are property substitutions resolved at startup; `launcher.install.location` is the installation directory and `launcher.project.location` is the project directory.
-
+NOTE: `&{...}` tokens are property substitutions resolved at startup.
+For example, `launcher.install.location` is the installation directory, and `launcher.project.location` is the project directory.
 
 === Script sources
 
 A `sources` entry maps a name to a `directory`.
-At activation each directory is registered as a script container, and scripts can then be referenced by a path relative to any source directory rather than by absolute path.
+At activation the service registers each directory as a script container.
+Scripts can then be referenced by a path relative to any source directory rather than by absolute path.
 
 Sources are loaded in reverse declaration order.
-A source declared later in the file therefore takes precedence: a script present under both `project` and `default` with the same relative path resolves to the `project` copy.
+A source declared later in the file therefore takes precedence.
+A script present under both `project` and `default` with the same relative path resolves to the `project` copy.
 This is what lets a deployment override a shipped default script by placing a file of the same name under its project directory.
 
 In the default configuration, `project-script` has the highest precedence, followed by `project`, `install`, and `default` (lowest).
 To give a custom source directory the highest precedence, declare it last in the `sources` object.
 
-NOTE: The load order depends on the key order in the `sources` JSON object.
-Wren:IDM's JSON parser preserves insertion order (the underlying implementation uses `LinkedHashMap`), so the file order is the activation order.
-Avoid JSON editors or prettifiers that sort or reorder object keys when editing `script.json`; if key order changes, the precedence hierarchy is silently altered and a deployment override may be shadowed by a shipped default without any error message.
+NOTE: The load order depends on the key order in the `sources` JSON object as declared in `script.json`.
+Avoid JSON editors or prettifiers that sort or reorder object keys when editing `script.json`.
+If key order changes, the precedence hierarchy is silently altered, and a deployment override may be shadowed by a shipped default without any error message.
 
 The shipped sources are:
 
-`default`:: `&{launcher.install.location}/bin/defaults/script` — scripts that ship with Wren:IDM.
-`install`:: `&{launcher.install.location}` — the installation root.
-`project`:: `&{launcher.project.location}` — the project root.
-`project-script`:: `&{launcher.project.location}/script` — project-specific scripts.
+`default`:: `&{launcher.install.location}/bin/defaults/script` – scripts that ship with Wren:IDM.
+`install`:: `&{launcher.install.location}` – the installation root.
+`project`:: `&{launcher.project.location}` – the project root.
+`project-script`:: `&{launcher.project.location}/script` – project-specific scripts.
 
-
-[[_script_variables]]
+[[script-variables]]
 == Script variables
 
 Wren:IDM injects a fixed set of variables into the scope of every script.
-All bindings described in this section — `openidm`, `console`, `identityServer`, and any configured `properties` — are available to both JavaScript and Groovy scripts.
+All bindings described in this section (`openidm`, `console`, `identityServer`, and any configured `properties`) are available to both JavaScript and Groovy scripts.
 
 === Global bindings
 
 These bindings are present in every script, regardless of how it is invoked.
 
 `openidm`::
-Resource and cryptography functions (see <<_the_openidm_binding,The openidm binding>>).
+Resource and cryptography functions (see <<openidm-binding,The openidm binding>>).
 
 `console`::
 Diagnostic output.
-Only `console.log(value)` is provided; it prints a string argument to the server's standard output.
-Non-string arguments are silently ignored — `console.log` does not coerce objects or numbers to strings.
+The `console` binding provides only `console.log(value)`, which prints a string argument to the server's standard output.
+It silently ignores non-string arguments.
+It does not coerce objects or numbers to strings.
 To log an object or array, pass it through `JSON.stringify(value)` first.
 Other standard methods (`console.error`, `console.warn`, etc.) are not available.
 
 `identityServer`::
-Accessors for server locations and boot properties (see <<_the_identityserver_binding,The identityServer binding>>).
+Accessors for server locations and boot properties (see <<identityserver-binding,The identityServer binding>>).
 
-`require` (JavaScript only)::
-Loads a named module from the configured script sources.
-The module name resolves to a `.js` file relative to any configured source directory (using the same precedence order), so `require('lib/lodash')` loads `lib/lodash.js` and `require('crypto')` loads `crypto.js`.
-The loaded file must export its API via the `exports` object.
+`require`::
+Loads a named module.
+Shipped JavaScript scripts use it to load library modules from the configured script sources, for example `require('lib/lodash')` in `router-authz.js` and `linkedView.js`.
+No shipped Groovy script calls `require()`.
+To share code across Groovy scripts, package shared classes as JARs and place them on the `groovy.classpath` (the installation lib directory by default).
+Then import them using standard Groovy or Java import statements.
 
-NOTE: Groovy scripts do not have an equivalent to `require()`.
-To share code across Groovy scripts, package shared classes as JARs and place them on the `groovy.classpath` (the installation lib directory by default), then import them using standard Groovy or Java import statements.
+The service also publishes every entry of the `properties` block in `script.json` as a binding of the same name.
 
-In addition, every entry of the `properties` block in `script.json` is published as a binding of the same name.
-
-
-[[_request_bindings]]
+[[request-bindings]]
 === Request bindings
 
-A script that handles a router request — for example a custom endpoint — additionally receives:
+A script that handles a router request (for example a custom endpoint) also receives:
 
 `request`::
 The CREST request being handled.
 Its type and payload let a single script serve multiple operations.
-Read `request.requestType` to branch on the operation; its string representation is the uppercase operation name (`READ`, `CREATE`, `UPDATE`, `DELETE`, `PATCH`, `QUERY`, or `ACTION`) for the seven standard CREST types routed to endpoint scripts.
-In Groovy, `request.requestType` accesses the Java `getRequestType()` method via Groovy property notation and returns a `RequestType` enum value; use `request.requestType.name()` to obtain the uppercase string for comparison.
+See below for the individual properties.
+
+`request.requestType`::
+Read `request.requestType` to branch on the operation.
+Its string representation is the uppercase operation name: `READ`, `CREATE`, `UPDATE`, `DELETE`, `PATCH`, `QUERY`, or `ACTION`.
+These are the seven standard CREST types routed to endpoint scripts.
+In Groovy, `request.requestType` accesses the Java `getRequestType()` method via Groovy property notation and returns a `RequestType` enum value.
+Use `request.requestType.name()` to get the uppercase string for comparison.
 +
 NOTE: The `RequestType` enum has an eighth constant, `API`, used internally for API Descriptor requests.
-Endpoint scripts are not invoked for `API` requests; a defensive `default` branch in a `switch` or `if`-chain covers this case automatically.
+Endpoint scripts are not invoked for `API` requests.
+A defensive `default` branch in a `switch` or `if`-chain covers this case automatically.
 +
-`request.content` carries the JSON body of the request.
-It is present for Create, Update, and Action operations; for Read, Delete, and Query operations the content is absent or empty.
+
+`request.content`::
+Carries the JSON body of the request.
+It is present for Create, Update, and Action operations.
+For Read, Delete, and Query operations, the content is absent or empty.
 In JavaScript, `request.content` behaves as a plain JavaScript object whose properties correspond to the JSON keys (for example, `request.content.fieldName`).
-In Groovy, `request.content` returns a `JsonValue`; call `.asMap()` to obtain a plain `Map`, or access individual keys via `request.content.get("fieldName").asString()`.
-When the key is absent, `get("key")` returns a `JsonValue` wrapping JSON `null`; calling `.asString()` on it returns Java `null` rather than throwing.
+In Groovy, `request.content` returns a `JsonValue`.
+Call `.asMap()` to get a plain `Map`, or access individual keys via `request.content.get("fieldName").asString()`.
+When the key is absent, `get("key")` returns a `JsonValue` wrapping JSON `null`.
+Calling `.asString()` on it returns Java `null` rather than throwing.
 Guard against `null` when the field is optional: `String val = content.get("optKey").asString(); if (val != null) { ... }`.
 +
-NOTE: For Patch operations, the patch operations list is not exposed through `request.content`.
+
+`request.patchOperations`::
+For Patch operations, the patch operations list is not exposed through `request.content`.
 Access it via `request.patchOperations` (Groovy property notation for `getPatchOperations()`), which returns a `List<PatchOperation>`.
-Each entry exposes: `getOperation()` — the operation name string (`replace`, `add`, `remove`, `increment`, `move`, or `copy`); `getField()` — the target field as a `JsonPointer`; and `getValue()` — the operation value as a `JsonValue`.
-In JavaScript, the same list is accessible as `request.patchOperations`; each element behaves as a Java `PatchOperation` object.
+Each entry exposes three accessors:
+
+* `getOperation()` – returns the operation name string (`replace`, `add`, `remove`, `increment`, `move`, `copy`, or `transform`)
+* `getField()` – returns the target field as a `JsonPointer`
+* `getValue()` – returns the operation value as a `JsonValue`
+
+In JavaScript, the same list is accessible as `request.patchOperations`.
+Each element behaves as a Java `PatchOperation` object.
++
 
 `context`::
 The request context chain (security, HTTP, and routing context).
 Use `context.security.authenticationId` to read the caller's authentication ID, and `context.security.authorization` to access the authorization map (containing `id`, `component`, `roles`, and related keys).
++
 
 `resourcePath`::
 The resource path of the request.
@@ -208,16 +235,14 @@ The resource path of the request.
 `resourceName`::
 A deprecated alias of `resourcePath`, retained for backward compatibility.
 
-
 === Scheduled bindings
 
 A script run from a schedule receives the value of `invokeContext.input` from the schedule configuration under the `object` binding.
 If `invokeContext.input` is absent from the schedule configuration, `object` is `null`.
-The global bindings described in <<_script_variables,Script variables>> — `openidm`, `console`, `identityServer`, and configured `properties` — are also available to scheduled scripts.
+The global bindings described in <<script-variables,Script variables>> (`openidm`, `console`, `identityServer`, and configured `properties`) are also available to scheduled scripts.
 See xref:scheduler.adoc[Scheduler] for the schedule configuration format.
 
-
-[[_the_openidm_binding]]
+[[openidm-binding]]
 === The openidm binding
 
 The `openidm` binding exposes the router as a set of functions, so that scripts can perform resource operations against any Wren:IDM endpoint.
@@ -227,61 +252,78 @@ The `openidm` binding exposes the router as a set of functions, so that scripts 
 | Function | Description
 
 | `openidm.create(resourcePath, newResourceId, content[, params[, fieldFilter[, context]]])`
-| Creates a resource; returns the created resource content, including the server-assigned `_id` when `newResourceId` was `null`.
+| Creates a resource.
+Returns the created resource content, including the server-assigned `_id` when `newResourceId` was `null`.
 Pass `null` for `newResourceId` to let the server assign an ID.
 
 | `openidm.read(resourceName[, params[, fieldFilter[, context]]])`
-| Reads a resource; returns its content, or `null` if not found.
+| Reads a resource.
+Returns its content, or `null` if not found.
 
 | `openidm.update(resourceName, revision, content[, params[, fieldFilter[, context]]])`
-| Replaces a resource; returns the updated resource content.
+| Replaces a resource.
+Returns the updated resource content.
 Pass `null` for `revision` to skip optimistic locking.
 
 | `openidm.patch(resourceName, revision, patches[, params[, fieldFilter[, context]]])`
-| Applies a partial update; returns the updated resource content.
-`patches` is an array of CREST patch operation objects.
+| Applies a partial update.
+Returns the updated resource content.
+The third parameter, `patches`, is an array of CREST patch operation objects.
 Each object must have an `operation` field (one of `replace`, `add`, `remove`, `increment`, `move`, or `copy`) and a `field` field (the JSON Pointer to the target field).
-Operations that carry a value also need a `value` field; `move` and `copy` operations also use a `from` field.
+Operations that carry a value also need a `value` field.
+For `move` and `copy` operations, the object also needs a `from` field.
 Note that CREST patch uses `operation` and `field`, not the RFC 6902 field names `op` and `path`.
 Example: `openidm.patch("managed/user/" + id, null, [{ "operation": "replace", "field": "/givenName", "value": "Jane" }]);`
 
 | `openidm.delete(resourceName, revision[, params[, fieldFilter[, context]]])`
-| Deletes a resource; returns the deleted resource content.
+| Deletes a resource.
+Returns the deleted resource content.
 
 | `openidm.query(resourcePath, params[, fieldFilter[, context]])`
-| Runs a query; returns an object with `result` (array of matching resources), `pagedResultsCookie`, `totalPagedResults`, and `totalPagedResultsPolicy`.
-`params` must include exactly one of `_queryId`, `_queryFilter`, or `_queryExpression`.
+| Runs a query.
+Returns an object with `result` (array of matching resources), `pagedResultsCookie`, `totalPagedResults`, and `totalPagedResultsPolicy`.
+Exactly one of `_queryId`, `_queryFilter`, or `_queryExpression` must be present in `params`.
 Additional CREST query parameters such as `_pageSize`, `_pagedResultsOffset`, `_pagedResultsCookie`, and `_sortKeys` may also be included in `params`.
-To limit the returned fields, use the `fieldFilter` positional parameter (preferred); alternatively, include `_fields` in `params` — `_fields` is used only when `fieldFilter` is not provided, so if both are present `fieldFilter` takes precedence.
+To limit the returned fields, use the `fieldFilter` positional parameter (preferred), or include `_fields` in `params`.
+`_fields` is used only when `fieldFilter` is not provided, so if both are present, `fieldFilter` takes precedence.
 
 | `openidm.action(resourceName, actionId, content, params[, fieldFilter[, context]])`
-a| Invokes an action; returns the action result.
+| Invokes an action.
+Returns the action result.
 Three calling forms are available:
 
-* `openidm.action(resourceName, content, params[, fieldFilter[, context]])` — 3-argument form; `actionId` is read from `params._action`.
-* `openidm.action(resourceName, null, content, params[, fieldFilter[, context]])` — 4-argument form with explicit `null`; `actionId` is still read from `params._action`.
-* `openidm.action(resourceName, actionId, content, params[, fieldFilter[, context]])` — 4-argument form with a string `actionId`; overrides `params._action`.
+* `openidm.action(resourceName, content, params[, fieldFilter[, context]])` – 3-argument form.
+In this form, `actionId` is read from `params._action`.
+* `openidm.action(resourceName, null, content, params[, fieldFilter[, context]])` – 4-argument form with explicit `null`.
+As with the 3-argument form, `actionId` is still read from `params._action`.
+* `openidm.action(resourceName, actionId, content, params[, fieldFilter[, context]])` – 4-argument form with a string `actionId`.
+This overrides `params._action`.
 
 |===
 
 The same binding also provides the cryptography functions `openidm.encrypt`, `openidm.decrypt`, `openidm.hash`, `openidm.isEncrypted`, `openidm.isHashed`, and `openidm.matches`.
-These are documented in xref:crypto.adoc#_script_api[Crypto Service — Script API].
+These are documented in xref:crypto.adoc#_script_api[Script API].
 
 NOTE: The resource functions are wired to the IDM connection factory through an optional service reference.
-If that reference is unavailable the resource functions are absent from the `openidm` binding, while the cryptography functions remain.
+If that reference is unavailable, the resource functions are absent from the `openidm` binding, while the cryptography functions remain.
 
-
-[[_the_identityserver_binding]]
+[[identityserver-binding]]
 === The identityServer binding
 
 `identityServer.getProperty(name, defaultValue, useCache)`::
 Returns a boot/system property by name.
+Only `name` is required.
+When the property is not found, the method returns `defaultValue`.
+Pass `null` to receive `null` on a missing property.
++
 Property names are resolved in order: system properties first, then entries in `conf/boot/boot.properties`, then explicit config properties.
 The common property names defined by the server are listed in `conf/boot/boot.properties`.
-Only `name` is required.
-When the property is not found, `defaultValue` is returned; pass `null` to receive `null` on a missing property.
-When `useCache` is `true`, the value is cached at the service level and reused across all subsequent script invocations; the cache is cleared when the script service is reconfigured or restarted.
++
++
+NOTE: When `useCache` is `true`, the service caches the value and reuses it across all subsequent script invocations.
+It clears the cache when the script service is reconfigured or restarted.
 When omitted, `useCache` defaults to `false` and the property is read on every call.
++
 
 `identityServer.getWorkingLocation()`::
 Returns the absolute path of the working location.
@@ -292,15 +334,17 @@ Returns the absolute path of the project location.
 `identityServer.getInstallLocation()`::
 Returns the absolute path of the installation location.
 
-
 == The /script endpoint
 
 The `/script` endpoint evaluates a script supplied in the request.
-Actions are invoked with `POST /openidm/script?_action=eval` or `POST /openidm/script?_action=compile`; the request body is a JSON object containing the script descriptor fields and any additional bindings.
-It supports only the `action` operation; read, create, update, delete, patch, and query all return a Not Supported error.
+A caller invokes actions with `POST /openidm/script?_action=eval` or `POST /openidm/script?_action=compile`.
+The request body is a JSON object containing the script descriptor fields and any additional bindings.
+It supports only the `action` operation.
+Read, create, update, delete, patch, and query all return a Not Supported error.
 
 WARNING: The `/script` endpoint evaluates arbitrary code supplied by the caller.
-HTTP access is governed by the router authorization filter (`router-authz.js`); by default it requires the `openidm-admin` role.
+The router authorization filter (`router-authz.js`) governs HTTP access.
+By default it requires the `openidm-admin` role.
 Verify that this endpoint is appropriately restricted in your deployment's `script/access.js` before exposing it over a network.
 
 Two action IDs are recognised:
@@ -311,7 +355,17 @@ Returns `400 Bad Request` if compilation fails.
 All three addressing modes (`source`, `file`, `name`) are valid for `compile`.
 
 `eval`::
-Compiles and evaluates the script, returning its result serialized as JSON: a script returning an object produces a JSON object body, a string produces a JSON string, a number produces a JSON number, a boolean produces a JSON boolean, and returning `null` or `undefined` produces a JSON `null` response.
+Compiles and evaluates the script, returning its result serialized as JSON.
+The response body depends on the script's return value:
++
+--
+* An object produces a JSON object body.
+* A string produces a JSON string body.
+* A number produces a JSON number body.
+* A boolean produces a JSON boolean body.
+* `null` or `undefined` produces a JSON `null` response.
+--
++
 Returns `400 Bad Request` on a compilation error, or `500 Internal Server Error` if the script throws at runtime.
 
 Any other action ID returns a Bad Request error.
@@ -334,10 +388,14 @@ For a compilation failure, `message` contains the engine's compile-error text (f
 For a runtime script exception, `message` contains the thrown exception's message.
 No `detail` field is populated by the script endpoint.
 
-In the request body, fields are split into _script-descriptor_ fields and _bindings_: fields recognized as script-descriptor (`name`, `file`, `source`, `type`, `revision`, `visibility`, `globals`) configure the script, while all remaining body fields become bindings passed into the script.
+In the request body, the endpoint splits fields into _script-descriptor_ fields and _bindings_.
+Fields recognized as script-descriptor (`name`, `file`, `source`, `type`, `revision`, `visibility`, `globals`) configure the script.
+All remaining body fields become bindings passed into the script.
 URL query parameters (beyond the CREST-reserved `_action`) are also added to the bindings map.
-This is intentional: sending `POST /openidm/script?_action=eval&myVar=hello` makes `myVar` available as a binding named `myVar` inside the script (as the string `"hello"`).
-Note that all additional parameter values arrive as strings; the script must parse them if a numeric or boolean type is needed.
+This is intentional.
+Sending `POST /openidm/script?_action=eval&myVar=hello` makes `myVar` available as a binding named `myVar` inside the script (as the string `"hello"`).
+Note that all additional parameter values arrive as strings.
+The script must parse them if a numeric or boolean type is needed.
 The `_action` parameter is consumed by the CREST framework before the handler is called and does not appear as a binding.
 
 Three mutually exclusive addressing modes identify which script to run:
@@ -349,39 +407,49 @@ Valid values for `type` are `text/javascript` and `groovy`.
 `file` (source reference)::
 Supply `file` with a path resolved against the configured script sources, and `type` to select the engine.
 Valid values for `type` are `text/javascript` and `groovy`.
-Path resolution uses the Java `File` API directly; on Linux (the standard deployment platform) it is case-sensitive.
-Internally, the file path string is stored as the registry entry name (`takeScript()` sets `ATTR_NAME` to the file path string when no explicit name is present), so the same caching and recompile rules apply as for `name` mode: the compiled script is cached in the registry and only recompiled when the file changes and the configured minimum recompile interval (`javascript.recompile.minimumInterval` or `groovy.recompile.minimumInterval`) has elapsed.
+Path resolution uses the Java `File` API directly.
+On Linux (the standard deployment platform), it is case-sensitive.
+Internally, the registry stores the file path string as the entry name.
+When no explicit name is present, `takeScript()` sets `ATTR_NAME` to the file path string.
+The same caching and recompile rules therefore apply as for `name` mode.
+The registry caches the compiled script and recompiles it only when the file changes and the configured minimum recompile interval (`javascript.recompile.minimumInterval` or `groovy.recompile.minimumInterval`) has elapsed.
++
 
 `name` (registry)::
 Supply `name` to invoke a pre-registered script by its registered name.
-`type` is inferred from the registration.
-The registered name is the same path string as the `file` field — for example, `auth/customPolicy.js`.
-A script is entered into the registry when `takeScript()` is called for its name, which happens at component activation for any configured scripted service (custom endpoints, synchronization mappings, managed-object hooks, and similar).
-Config load therefore suffices to register a script — it does not require a prior HTTP request to the endpoint.
-`name` mode then reuses the compiled entry without re-parsing.
-If the named entry is not present and active in the script registry — for example because no component that references the script has yet activated, or because the service was reconfigured — the endpoint returns `503 Service Unavailable`.
+Its `type` is inferred from the registration.
+The registered name is the same path string as the `file` field, for example `auth/customPolicy.js`.
+Calling `takeScript()` for the script's name enters it into the registry.
+This call happens at component activation for any configured scripted service (custom endpoints, synchronization mappings, managed-object hooks, and similar).
+Config load therefore suffices to register a script.
+It does not require a prior HTTP request to the endpoint.
+This mode then reuses the compiled entry without re-parsing.
+If the named entry is not present and active in the script registry, the endpoint returns `503 Service Unavailable`.
+This can happen, for example, because no component that references the script has yet activated, or because the service was reconfigured.
 
-NOTE: `auto-detect` is recognized internally as a sentinel by the descriptor filter and is not a meaningful caller-supplied field.
-
-The three additional descriptor fields — `revision`, `visibility`, and `globals` — control optional script-framework behavior:
+The three additional descriptor fields (`revision`, `visibility`, and `globals`) control optional script-framework behavior:
 
 `revision`::
 An optional version label or hash.
 The script registry uses it to detect changes and force recompilation when the same source is re-submitted with a different revision value.
-Use `revision` when repeatedly submitting an evolving script source — changing the revision guarantees a fresh compile rather than a cached result.
+Use `revision` when repeatedly submitting an evolving script source.
+Changing the revision guarantees a fresh compile rather than a cached result.
 
 `visibility`::
 An optional label that tags the script registry entry with an access scope (`public` by default).
-Within Wren:IDM, this label is stored in the registry but not enforced; the `/script` endpoint evaluates the script regardless of its visibility value.
+Within Wren:IDM, the registry stores this label but does not enforce it.
+The `/script` endpoint evaluates the script regardless of its visibility value.
 
 `globals`::
 An optional JSON object whose key-value pairs are injected as additional script bindings before evaluation.
 Type: object.
-Values follow the same type mapping as the `properties` block: JSON objects arrive in Groovy as Java `Map` instances and JSON arrays as Java `List` instances; the ECMAScript engine wraps them transparently as ordinary JavaScript objects and arrays.
-Use `globals` to pass bindings that should not be confused with body data fields — particularly when a key name would collide with a descriptor field.
+Values follow the same type mapping as the `properties` block.
+JSON objects arrive in Groovy as Java `Map` instances, and JSON arrays arrive as Java `List` instances.
+The ECMAScript engine wraps them transparently as ordinary JavaScript objects and arrays.
+Use `globals` to pass bindings that should not be confused with body data fields, particularly when a key name would collide with a descriptor field.
 
 [source,json]
-.Example (illustrative) — evaluate an inline script
+.Illustrative example: evaluate an inline script
 ----
 {
   "type": "text/javascript",
@@ -391,8 +459,7 @@ Use `globals` to pass bindings that should not be confused with body data fields
 }
 ----
 
-
-[[_custom_endpoints]]
+[[custom-endpoints]]
 == Custom endpoints
 
 Custom endpoints expose deployment-defined scripts as REST resources under `/endpoint/`.
@@ -403,10 +470,12 @@ Configuration file:: `endpoint-<name>.json` (factory configuration)
 Router mapping:: `endpoint/<name>` (see below)
 
 Each `conf/endpoint-<name>.json` file is one factory-configuration instance and registers one endpoint.
-The endpoint's router prefix is the value of the `context` field; if `context` is omitted, it defaults to `endpoint/<factoryPid>*`, where `<factoryPid>` is the portion of the file name after `endpoint-`.
+The endpoint's router prefix is the value of the `context` field.
+If `context` is omitted, it defaults to `endpoint/<factoryPid>*`, where `<factoryPid>` is the portion of the file name after `endpoint-`.
 For example, `conf/endpoint-myService.json` defaults to `endpoint/myService*`.
 The trailing `*` registers the route as a prefix match, so all paths under `endpoint/myService/` are handled by the same endpoint script.
-When `context` is provided without a trailing `*`, the route matches that exact path only; requests to any subpath return a 404 Not Found because no route handles them.
+When `context` is provided without a trailing `*`, the route matches that exact path only.
+Requests to any subpath return a 404 Not Found because no route handles them.
 
 An endpoint configuration declares the script the same way as any other script reference:
 
@@ -415,22 +484,27 @@ An endpoint configuration declares the script the same way as any other script r
 `file`:: Required if `source` is absent. A path to a script file, resolved against the configured script sources. Mutually exclusive with `source`.
 `context`:: Optional. The router prefix for the endpoint. If absent, defaults to `endpoint/<factoryPid>*`.
 
-The endpoint script receives the request bindings described in <<_request_bindings,Request bindings>>, branches on the request type, and returns a value that becomes the HTTP response.
-For resource operations (read, create, update, patch, delete), returning `null` produces `404 Not Found`; any other return value produces `200 OK` with the value as the response body.
+The endpoint script receives the request bindings described in <<request-bindings,Request bindings>>, branches on the request type, and returns a value that becomes the HTTP response.
+For resource operations (read, create, update, patch, delete), returning `null` produces `404 Not Found`.
+Any other return value produces `200 OK` with the value as the response body.
 For action operations, any return value including `null` produces `200 OK`.
 For query operations, the script may return:
-
++
 --
-* A flat list — each element becomes a result entry; no pagination metadata.
-* A map with a `result` key — `result` is required and must be a list of result entries.
-  Optional pagination metadata keys are `pagedResultsCookie` (string), `totalPagedResultsPolicy` (string), and `totalPagedResults` (integer); omit them or set to `null` when not applicable.
-  A map that is not null and does not contain a `result` key causes a `500 Internal Server Error`.
-* `null` — use callback-based result streaming by calling `callback.handleResource(...)` directly from within the script.
+* A flat list.
+Each element becomes a result entry, with no pagination metadata.
+* A map with a `result` key.
+This key is required and must be a list of result entries.
+Optional pagination metadata keys are `pagedResultsCookie` (string), `totalPagedResultsPolicy` (string), and `totalPagedResults` (integer).
+Omit them or set them to `null` when not applicable.
+A map that is not null and does not contain a `result` key causes a `500 Internal Server Error`.
+* `null`.
+Produces an empty result: no entries are reported to the caller, and no pagination metadata is set.
 --
-
++
 To raise a typed HTTP status from a script, throw a plain object with `code` and `message` fields:
-`throw { "code": 403, "message": "Forbidden" };`.
-This is the pattern used by the shipped `router-authz.js` filter and is the recommended approach for both JavaScript and Groovy endpoint scripts.
+`throw { "code": 403, "message": "Access denied" };`.
+The shipped `router-authz.js` filter uses this pattern, and it is the recommended approach for both JavaScript and Groovy endpoint scripts.
 
 Any other exception becomes `500 Internal Server Error`.
 
