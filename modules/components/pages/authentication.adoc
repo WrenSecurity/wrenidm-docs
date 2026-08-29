@@ -1,3 +1,501 @@
 = Authentication
 
-NOTE: TBD: Authentication modules, access.js description
+_Authentication Service_ configures and manages the HTTP authentication filter that validates every incoming REST request to Wren:IDM.
+
+OSGi service class:: `org.forgerock.openidm.auth.AuthenticationService`
+OSGi persistent identifier:: `org.forgerock.openidm.authentication`
+Configuration file:: `conf/authentication.json`
+Router mapping:: `/authentication`
+
+The service builds a Commons Authentication Framework (CAF) filter from `authentication.json` at activation and replaces it at runtime whenever the optional _Identity Provider Service_ signals a provider configuration change.
+Every authentication module defined in the configuration is wrapped by an internal `IDMAuthModuleWrapper` that adds Wren:IDM-specific role calculation and the optional `augmentSecurityContext` script hook to every module.
+
+Configuration is split between `authentication.json` (filter and module settings) and `script/access.js` (resource-level access rules).
+The `authentication.json` file has a single top-level key `serverAuthContext`, which contains `sessionModule` (the session module configuration) and `authModules` (the ordered list of authentication modules).
+
+
+[[authentication-session-module]]
+== Session Module
+
+The session module creates and validates the JWT cookie used to maintain authenticated sessions.
+Only one session module is supported per configuration.
+The default session module is `JWT_SESSION`, backed by the JASPI `JwtSessionModule`.
+`JWT_SESSION` is the only built-in session module type; a custom session module can be provided using `className` instead of `name`, analogous to the auth module `className` option.
+
+.Default `sessionModule` configuration
+[source,json]
+----
+{
+    "name" : "JWT_SESSION",
+    "properties" : {
+        "keyAlias" : "&{openidm.https.keystore.cert.alias}",
+        "privateKeyPassword" : "&{openidm.keystore.password}",
+        "keystoreType" : "&{openidm.keystore.type}",
+        "keystoreFile" : "&{openidm.keystore.location}",
+        "keystorePassword" : "&{openidm.keystore.password}",
+        "maxTokenLifeMinutes" : "120",
+        "tokenIdleTimeMinutes" : "30",
+        "sessionOnly" : true,
+        "isHttpOnly" : true
+    }
+}
+----
+
+`keyAlias`::
+Alias of the keystore certificate used to sign and encrypt the JWT.
+Type: String. Default: `&{openidm.https.keystore.cert.alias}`.
+
+`privateKeyPassword`::
+Password for the private key entry.
+Type: String. Default: `&{openidm.keystore.password}`.
+
+`keystoreType`::
+Keystore type (e.g. `JKS`, `PKCS12`).
+Type: String. Default: `&{openidm.keystore.type}`.
+
+`keystoreFile`::
+Path to the keystore file.
+Type: String. Default: `&{openidm.keystore.location}`.
+
+`keystorePassword`::
+Keystore store password.
+Supports `&{…}` property substitution.
+Type: String. Default: `&{openidm.keystore.password}`.
+
+`maxTokenLifeMinutes`::
+Maximum session lifetime in minutes.
+Type: String — must be a quoted value (e.g., `"120"`); the module reads this field as a string and parses it with `Integer.parseInt()`, so a JSON integer will cause a startup failure.
+Default: `"120"`.
+
+`tokenIdleTimeMinutes`::
+Session idle timeout in minutes.
+Type: String — must be quoted; parsed the same way as `maxTokenLifeMinutes`.
+Default: `"30"`.
+
+`sessionOnly`::
+When `true`, the JWT cookie has no `Max-Age` or `Expires` attribute (session cookie).
+Type: Boolean. Default: `true`.
+
+`isHttpOnly`::
+When `true`, the `HttpOnly` flag is set on the JWT cookie.
+Type: Boolean. Default: `true`.
+
+NOTE: If `hmacKey` is absent from the session module properties, the service automatically retrieves a shared HMAC key from the keystore at startup using the alias defined by the `openidm.config.crypto.jwtsession.hmackey.alias` system property (default `openidm-jwtsessionhmac-key`).
+
+Sending `X-OpenIDM-NoSession: true` with any request suppresses JWT cookie creation for that request; authentication is performed but no session is persisted.
+
+
+[[authentication-modules]]
+== Authentication Modules
+
+Authentication modules are evaluated in the order they appear in `authModules`.
+The first module to return SUCCESS for a request wins; remaining modules are not evaluated.
+A module with `"enabled": false` is excluded at startup and takes no part in request processing.
+
+The subsections below describe each built-in module type.
+`SOCIAL_PROVIDERS` is a special template entry, not a module type; it is described last.
+
+Each module entry accepts the following top-level keys:
+
+.Auth module entry structure
+[source,json]
+----
+{
+    "name" : "MODULE_TYPE",
+    "properties" : {
+        // module-specific configuration
+    },
+    "enabled" : true
+}
+----
+
+`name`::
+Built-in module type alias (see below).
+Required unless `className` is specified.
+Type: String.
+
+`className`::
+Fully qualified class name of a custom `AsyncServerAuthModule` implementation.
+Mutually exclusive with `name`.
+Type: String.
+
+`properties`::
+Module-specific configuration object.
+Type: Object.
+
+`enabled`::
+Set to `false` to disable the module without removing it.
+Type: Boolean. Default: `true`.
+
+
+=== Common Module Properties
+
+The following properties are processed by `IDMAuthModuleWrapper` and apply to all built-in modules that perform a user-detail lookup.
+
+.Example (illustrative)
+[source,json]
+----
+{
+    "queryOnResource" : "managed/user",
+    "queryId" : "credential-query",
+    "propertyMapping" : {
+        "authenticationId" : "username",
+        "userCredential" : "password",
+        "userRoles" : "authzRoles",
+        "groupMembership" : "memberOf"
+    },
+    "defaultUserRoles" : [ "openidm-authorized" ],
+    "groupRoleMapping" : {
+        "openidm-admin" : [ "cn=admins,ou=groups,dc=example,dc=com" ]
+    },
+    "groupComparisonMethod" : "ldap",
+    "augmentSecurityContext" : {
+        "type" : "text/javascript",
+        "source" : "require('auth/customAuthz').setProtectedAttributes(security)"
+    },
+    "clientIPHeader" : "X-Forwarded-For"
+}
+----
+
+`queryOnResource`::
+Router path queried for user details (e.g. `managed/user`, `repo/internal/user`).
+Type: String.
+
+`queryId`::
+Named query used for the credential lookup.
+Required when `propertyMapping` is used.
+Type: String.
+
+`propertyMapping`::
+Configuration object mapping resource attributes to authentication identity, credential, role, and group membership.
+Required when the module performs a credential lookup via `queryOnResource`.
+Type: Object.
+
+`propertyMapping.authenticationId`::
+Object attribute that holds the authentication identity (typically the username field).
+Type: String.
+
+`propertyMapping.userCredential`::
+Object attribute that holds the credential (typically the password field).
+Type: String.
+
+`propertyMapping.userRoles`::
+Object attribute that holds the user's role list.
+Type: String.
+
+`propertyMapping.groupMembership`::
+Object attribute for group membership, used together with `groupRoleMapping`.
+Type: String.
+
+`defaultUserRoles`::
+Roles assigned to every successfully authenticated user regardless of stored roles.
+Type: Array of String. Default: `[]`.
+
+`groupRoleMapping`::
+Map from Wren:IDM role names to lists of group values; derives roles from group membership.
+Type: Object. Default: `{}`.
+
+`groupComparisonMethod`::
+Comparison method for `groupRoleMapping` lookups.
+Accepted values: `equals` (case-sensitive), `caseInsensitive`, `ldap` (DN-aware: case- and whitespace-insensitive, intended for LDAP group DN values).
+Type: String. Default: `equals`.
+
+`augmentSecurityContext`::
+Script configuration executed after successful authentication to augment the security context.
+The script receives a `security` binding with two fields: `authenticationId` (string) and `authorization` (map with sub-keys: `id` — user's internal identifier; `component` — resource path of the authenticated user, e.g. `managed/user`; `roles` — list of role strings assigned to this user; `moduleId` — name of the auth module that authenticated the request).
+The script must return the (possibly modified) `security` object; non-null `authenticationId` and `authorization` values in the return are applied to the request security context.
+Type: Object (script descriptor).
+
+`clientIPHeader`::
+HTTP request header used to determine the client IP for audit logging (e.g. `X-Forwarded-For`).
+Type: String.
+
+
+=== STATIC_USER
+
+Authenticates a single hardcoded username and password pair against a fixed identity.
+Typically used to grant anonymous access to public endpoints by assigning limited default roles.
+Credential verification checks the incoming request credentials against the hardcoded `username` and `password` values; `queryOnResource` is not involved in credential verification — it is used by the authentication wrapper for post-authentication user detail lookup (role derivation).
+
+.Default `STATIC_USER` configuration
+[source,json]
+----
+{
+    "name": "STATIC_USER",
+    "properties": {
+        "queryOnResource": "repo/internal/user",
+        "username": "anonymous",
+        "password": "anonymous",
+        "defaultUserRoles": [ "openidm-reg" ]
+    },
+    "enabled": true
+}
+----
+
+
+=== MANAGED_USER
+
+Authenticates users stored in the `managed/user` resource by executing a named query and mapping credentials via `propertyMapping`.
+
+.Default `MANAGED_USER` configuration
+[source,json]
+----
+{
+    "name": "MANAGED_USER",
+    "properties": {
+        "augmentSecurityContext": {
+            "type": "text/javascript",
+            "source": "require('auth/customAuthz').setProtectedAttributes(security)"
+        },
+        "queryId": "credential-query",
+        "queryOnResource": "managed/user",
+        "propertyMapping": {
+            "authenticationId": "username",
+            "userCredential": "password",
+            "userRoles": "authzRoles"
+        },
+        "defaultUserRoles": []
+    },
+    "enabled": true
+}
+----
+
+
+=== INTERNAL_USER
+
+Authenticates internal administrative users stored in `repo/internal/user`.
+Used by the built-in `openidm-admin` account.
+
+.Default `INTERNAL_USER` configuration
+[source,json]
+----
+{
+    "name": "INTERNAL_USER",
+    "properties": {
+        "queryId": "credential-internaluser-query",
+        "queryOnResource": "repo/internal/user",
+        "propertyMapping": {
+            "authenticationId": "username",
+            "userCredential": "password",
+            "userRoles": "roles"
+        },
+        "defaultUserRoles": []
+    },
+    "enabled": true
+}
+----
+
+
+=== CLIENT_CERT
+
+Authenticates requests that carry a client certificate (mutual TLS).
+The certificate subject is validated against `security/truststore`.
+The `allowedAuthenticationIdPatterns` property restricts accepted subject DNs by regex; an empty list denies all certificates.
+
+.Default `CLIENT_CERT` configuration
+[source,json]
+----
+{
+    "name": "CLIENT_CERT",
+    "properties": {
+        "queryOnResource": "security/truststore",
+        "defaultUserRoles": [ "openidm-cert" ],
+        "allowedAuthenticationIdPatterns": []
+    },
+    "enabled": true
+}
+----
+
+`allowedAuthenticationIdPatterns`::
+Array of Java regular expressions matched against the certificate subject DN using `String.matches()` (full-string matching).
+A certificate is accepted only if its subject DN matches at least one pattern.
+An empty list denies all client certificates.
+Type: Array of String. Default: `[]`.
+
+
+=== PASSTHROUGH
+
+Passes authentication credentials through to an OpenICF connector system (e.g. LDAP directory).
+Credential verification is delegated directly to the connector's `authenticate` operation on `queryOnResource`.
+The module has no module-specific properties beyond those in the Common Module Properties section above.
+
+NOTE: `queryOnResource` is required and must point to a `system/` resource that supports the `authenticate` action.
+
+.Example (illustrative)
+[source,json]
+----
+{
+    "name": "PASSTHROUGH",
+    "properties": {
+        "queryOnResource": "system/ldap/account",
+        "defaultUserRoles": [ "openidm-authorized" ]
+    },
+    "enabled": true
+}
+----
+
+
+=== IWA
+
+Integrated Windows Authentication, backed by the JASPI `IWAModule`.
+
+NOTE: `IWAModule` is provided by an external JASPI library.
+Its module-specific properties are not defined in the Wren:IDM source; refer to the JASPI IWA module documentation for available configuration options.
+
+
+=== OPENAM_SESSION
+
+Validates requests carrying a Wren:AM session token, backed by the JASPI `OpenAMSessionModule`.
+
+NOTE: `OpenAMSessionModule` is provided by an external JASPI library.
+Its module-specific properties (e.g. the OpenAM server URL) are not defined in the Wren:IDM source; refer to the JASPI OpenAM Session module documentation for available configuration options.
+
+
+=== OAUTH
+
+Validates OAuth 2.0 bearer tokens.
+
+NOTE: This module is typically auto-populated from a `SOCIAL_PROVIDERS` template entry by the _Identity Provider Service_ and should not be configured manually in most deployments.
+
+
+=== OPENID_CONNECT
+
+Validates OpenID Connect ID tokens.
+
+NOTE: This module is typically auto-populated from a `SOCIAL_PROVIDERS` template entry by the _Identity Provider Service_ and should not be configured manually in most deployments.
+
+
+=== TRUSTED_ATTRIBUTE
+
+Trusts an authentication identity provided as a pre-validated request attribute.
+For use with trusted gateway or reverse-proxy deployments that set a known request attribute after performing their own authentication.
+
+WARNING: This module performs no credential verification.
+Any client that can set the configured request attribute is authenticated unconditionally.
+Deploy only behind a trusted gateway or reverse proxy that enforces its own authentication before setting the attribute.
+
+.Example `TRUSTED_ATTRIBUTE` configuration (illustrative)
+[source,json]
+----
+{
+    "name" : "TRUSTED_ATTRIBUTE",
+    "properties" : {
+        "queryOnResource" : "managed/user",
+        "authenticationIdAttribute" : "X-Forwarded-User",
+        "defaultUserRoles" : [ "openidm-authorized" ]
+    },
+    "enabled" : true
+}
+----
+
+`authenticationIdAttribute`::
+Name of the request attribute that contains the pre-authenticated identity.
+The module succeeds if this attribute is present and is a non-null string; otherwise it fails.
+Required.
+Type: String.
+
+
+=== SOCIAL_PROVIDERS
+
+A configuration template — not a real module implementation.
+When present and enabled, the `SOCIAL_PROVIDERS` entry is replaced at runtime with one `OAUTH` or `OPENID_CONNECT` module for each identity provider registered with the _Identity Provider Service_.
+The `SOCIAL_PROVIDERS` entry itself is never instantiated as an auth module.
+
+
+[[authorization-script]]
+== Authorization Script
+
+Request authorization is enforced by `script/access.js` in the project directory.
+The script defines an `httpAccessConfig` object whose `configs` array lists rules evaluated in order against every incoming request.
+The first matching rule that permits the request wins.
+
+=== Rule Schema
+
+Each rule entry has the following fields:
+
+.Rule entry structure (illustrative)
+[source,json]
+----
+{
+    "pattern"         : "managed/user/*",
+    "roles"           : "openidm-authorized",
+    "methods"         : "read,update,patch",
+    "actions"         : "*",
+    "customAuthz"     : "ownDataOnly()",
+    "excludePatterns" : ""
+}
+----
+
+`pattern`::
+Resource path pattern.
+`*` matches everything; `prefix/*` matches any resource under that prefix.
+A pattern without a wildcard matches only that exact path.
+Type: String.
+
+`roles`::
+Comma-separated list of required roles, or `*` to allow any role (including unauthenticated).
+Type: String.
+
+`methods`::
+Comma-separated list of permitted CREST methods (`read`, `create`, `update`, `delete`, `patch`, `query`, `action`), or `*`.
+To permit specific action calls, include `action` in `methods` and list the permitted action names in `actions`.
+Type: String.
+
+`actions`::
+Comma-separated list of permitted action names, or `*`.
+Use `""` to disallow all actions.
+Type: String.
+
+`customAuthz`::
+Optional JavaScript expression string evaluated as an additional authorization check after role and method matching.
+Typically a function call or a compound expression combining function calls defined in `access.js` (e.g. `"ownDataOnly()"`, `"isMyTask()"`, `"checkIfUIIsEnabled('selfRegistration') || checkIfUIIsEnabled('passwordReset')"`).
+Type: String.
+
+`excludePatterns`::
+Optional comma-separated list of patterns excluded from this rule's `pattern` match.
+Type: String.
+
+=== Default Role Assignments
+
+The default `access.js` shipped with Wren:IDM pre-configures the following role-to-resource mappings:
+
+* `*` (any role, including unauthenticated) — `info/*`, `authentication` (read + `getAuthToken`/`logout`), selected `selfservice/*`, and public `config/ui/*` paths.
+* `openidm-reg` — self-registration: `managed/user` create, guarded by `checkIfUIIsEnabled('selfRegistration')`.
+* `openidm-authorized` — authenticated users: `policy/*`, `config/ui/*`, personal data via `ownDataOnly()`, workflow task actions, and `authentication` `reauthenticate` action.
+* `openidm-admin` — broad access to all resources, with `disallowQueryExpression()` and `disallowCommandAction()` guards on repository endpoints.
+* `openidm-cert` — mTLS clients: `managed/user` patch restricted to the `password` field.
+
+Operators add custom authorization functions at the end of `access.js`, below the `httpAccessConfig` definition.
+
+
+[[authentication-rest-operations]]
+== REST Operations
+
+The `/authentication` endpoint exposes the following operations.
+
+[cols="1,1,4"]
+|===
+|Method |Action |Description
+
+|`read`
+|—
+|Returns enabled OIDC/OAuth identity provider resolver metadata (client secrets omitted).
+Does not return the full authentication configuration.
+
+|`action`
+|`getAuthToken`
+|Exchanges an OAuth authorization code for an auth token.
+Request body must include `provider`, `code`, `nonce`, and `redirect_uri`.
+
+|`action`
+|`logout`
+|Invalidates the current JWT session cookie.
+
+|`action`
+|`reauthenticate`
+|Re-validates the active session using the `X-OpenIDM-Reauth-Password` header.
+The header value accepts RFC 5987 encoding (UTF-8 or ISO-8859-1).
+Returns `{"reauthenticated": true}` on success; `403 Forbidden` on failure.
+|===
+
+NOTE: To read or update the full `authentication.json` configuration, use the Config Service: `GET /openidm/config/authentication`.
