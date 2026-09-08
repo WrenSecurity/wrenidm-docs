@@ -1,3 +1,364 @@
 = Security
 
-NOTE: TBD: Restricting access to the REST API endpoints
+_Security Management Service_ manages the certificates and keys in the Wren:IDM keystore and truststore over REST under the `/security` endpoint.
+The REST endpoint builds on two lower-level OSGi services from the `openidm-keystore` bundle.
+The keystore service and the truststore service load the store files at startup and create the default entries.
+They also give other components access to the loaded stores.
+
+
+[#keystore-truststore-services]
+== Keystore and Truststore Services
+
+Both services implement the `KeyStoreService` interface.
+Boot properties configure them, not JSON configuration files.
+
+[#keystore-service]
+=== Keystore Service
+
+OSGi service class:: `org.forgerock.openidm.keystore.impl.KeyStoreServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.keystore`
+Configuration file:: none (configured through `boot.properties`)
+Router mapping:: none
+
+The service reads its settings from the `openidm.keystore.*` boot properties and loads the keystore at activation.
+A relative location resolves against the Wren:IDM install directory.
+
+At construction the service also sets the `javax.net.ssl.keyStore`, `javax.net.ssl.keyStorePassword`, and `javax.net.ssl.keyStoreType` system properties, unless `javax.net.ssl.keyStore` is already set.
+For a PKCS11 store (location `none`), this sets `javax.net.ssl.keyStore` to the literal string `none`, not a real file path.
+`javax.net.ssl.keyStorePassword` receives the already-resolved plaintext password, not a raw `OBF:`/`CRYPT:`/`CONSOLE` form (see <<password-obfuscation>>).
+
+The bundle also exposes a shared-key service that hands out keys and key pairs from the loaded keystore to Java consumers.
+Known consumers are the authentication service and the self-service module.
+
+OSGi service class:: `org.forgerock.openidm.keystore.impl.SharedKeyServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.keystore.sharedkey`
+Configuration file:: none
+Router mapping:: none
+
+[#truststore-service]
+=== Truststore Service
+
+OSGi service class:: `org.forgerock.openidm.keystore.impl.TrustStoreServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.truststore`
+Configuration file:: none (configured through `boot.properties`)
+Router mapping:: none
+
+The service reads the `openidm.truststore.*` boot properties.
+When `openidm.truststore.location` is not set, all four settings (type, provider, location, and password) fall back to the keystore's values as a single unit.
+The truststore does not selectively borrow just the file while keeping its own type, provider, or password.
+An explicit relative location resolves against the install directory, the same as the keystore location.
+At construction it sets the `javax.net.ssl.trustStore`, `javax.net.ssl.trustStorePassword`, and `javax.net.ssl.trustStoreType` system properties unconditionally, with no already-set guard the way the keystore service has.
+
+[#boot-properties]
+=== Boot Properties
+
+`conf/boot/boot.properties` defines the store locations, types, providers, and passwords.
+The launcher reads this file once, at server startup, and both services read their settings from that snapshot at their own OSGi activation.
+A change to `conf/boot/boot.properties` therefore takes effect only after a server restart.
+
+.Default `boot.properties` (keystore and truststore settings)
+[source,properties]
+----
+openidm.https.keystore.cert.alias=openidm-localhost
+
+openidm.keystore.type=JCEKS
+openidm.truststore.type=JKS
+openidm.keystore.provider=SunJCE
+openidm.truststore.provider=SUN
+openidm.keystore.location=security/keystore.jceks
+openidm.truststore.location=security/truststore
+
+openidm.keystore.password=changeit
+openidm.truststore.password=changeit
+
+# PKCS#11 configuration file
+#openidm.security.pkcs11.config=
+
+# optionally map a hostname to a specific client key alias
+openidm.ssl.host.aliases=localhost=
+
+# keys in the keystore for config encryption, self-service, and JWT session signing
+openidm.config.crypto.alias=openidm-sym-default
+openidm.config.crypto.selfservice.sharedkey.alias=openidm-selfservice-key
+openidm.config.crypto.jwtsession.hmackey.alias=openidm-jwtsessionhmac-key
+----
+
+`openidm.keystore.type`::
+Keystore type.
+The shipped default is `JCEKS`.
+When the property is absent, the service uses the JVM default keystore type.
+
+`openidm.keystore.provider`::
+Java security provider that supplies the keystore implementation.
+The shipped default is `SunJCE`.
+
+`openidm.keystore.location`::
+Path to the keystore file, relative to the install directory or absolute.
+The shipped default is `security/keystore.jceks`.
+Activation fails if no file exists at this location, and the service never creates one automatically.
+Also accepts `none` for a non-file-based store, as does `openidm.truststore.location`.
+See <<pkcs11-support>>.
+
+`openidm.keystore.password`::
+Keystore password.
+The shipped default is `changeit`.
+See <<password-obfuscation>> for protected forms of this value.
+
+`openidm.truststore.type`, `openidm.truststore.provider`, `openidm.truststore.location`, `openidm.truststore.password`::
+The same four settings for the truststore.
+The shipped defaults are `JKS`, `SUN`, `security/truststore`, and `changeit`.
+When `openidm.truststore.location` is not set, all four values fall back to the keystore settings.
+
+`openidm.https.keystore.cert.alias`::
+Alias of the certificate the server generates and uses for HTTPS.
+Default: `openidm-localhost`.
+
+`openidm.ssl.host.aliases`::
+Comma-separated `hostname=alias` pairs that map a hostname to a specific client key alias for outbound SSL.
+An entry with nothing after the `=`, such as the shipped default `localhost=`, still adds the hostname to the map, with a `null` alias value.
+For a mapped hostname, `chooseClientAlias` returns the mapped alias directly, including a `null` value, instead of falling through to the default key manager.
+A bare `hostname=` entry therefore suppresses client-certificate selection for that host, rather than leaving it unmapped.
+See <<ssl-context-reload>>.
+
+`openidm.security.pkcs11.config`::
+Path to a SunPKCS11 configuration file.
+Required when the keystore type is `PKCS11` (see <<pkcs11-support>>).
+
+`openidm.config.crypto.alias`, `openidm.config.crypto.selfservice.sharedkey.alias`, `openidm.config.crypto.jwtsession.hmackey.alias`::
+Keystore aliases for the config-encryption, self-service, and JWT session signing secret keys listed in <<default-keystore-entries>>.
+The shipped defaults are `openidm-sym-default`, `openidm-selfservice-key`, and `openidm-jwtsessionhmac-key`.
+
+[#password-obfuscation]
+=== Password Obfuscation
+
+The store password properties accept protected values in addition to plaintext:
+
+* `OBF:<value>` – an obfuscated password.
+* `CRYPT:<value>` – a password encrypted with the built-in AES key.
+* `CONSOLE` – an interactive password prompt at startup.
+
+`org.forgerock.openidm.util.CryptoUtil` (module `openidm-util`) has a command-line entry point that prints both the `OBF:` and `CRYPT:` forms for a given password.
+It takes the password as an optional single argument, prompting for it interactively when omitted.
+
+[#default-keystore-entries]
+=== Default Keystore Entries
+
+At activation the keystore service creates the following entries when they do not exist yet, and writes the store back to disk.
+
+[cols="2,1,3",options="header"]
+|===
+| Alias (shipped default) | Entry type | Purpose
+
+| `openidm-sym-default`
+| AES secret key
+| Encryption of sensitive configuration fields.
+Alias taken from `openidm.config.crypto.alias`.
+
+| `openidm-selfservice-key`
+| AES secret key
+| Self-service shared key.
+Alias taken from `openidm.config.crypto.selfservice.sharedkey.alias`.
+
+| `openidm-jwtsessionhmac-key`
+| HmacSHA256 secret key
+| JWT session HMAC signing key.
+Alias taken from `openidm.config.crypto.jwtsession.hmackey.alias`.
+
+| `selfservice`
+| Certificate with RSA private key
+| Self-service certificate (2048-bit key, `SHA512WithRSAEncryption` signature).
+|===
+
+The truststore service adds one more entry during its initialization.
+When neither store contains the alias named by `openidm.https.keystore.cert.alias` (default `openidm-localhost`), it generates a self-signed certificate for `localhost` with a 2048-bit RSA key.
+It stores the certificate with its private key in both the keystore and the truststore.
+
+[#pkcs11-support]
+=== PKCS#11 Support
+
+When `openidm.keystore.type` or `openidm.truststore.type` is `PKCS11`, the service loads the SunPKCS11 security provider with the configuration file named by `openidm.security.pkcs11.config`.
+Both the keystore and truststore services extend the same base class and apply this behavior identically.
+Activation fails when the property is not set.
+The service skips default entry generation for PKCS11 stores, for both the keystore and the truststore.
+Set the store location to `none` when the store is not file-based.
+
+[#ssl-context-reload]
+=== SSL Context Reload
+
+OSGi service class:: `org.forgerock.openidm.keystore.impl.KeyStoreManagementServiceImpl`
+OSGi persistent identifier:: `org.forgerock.openidm.keystore.impl.manager`
+Configuration file:: none
+Router mapping:: none
+
+A separate keystore management service builds the JVM default `SSLContext` from the loaded keystore and truststore.
+It runs once at activation and again after every modification made through the `/security` endpoint.
+The service wraps the standard key manager in a `MappedAliasKeyManager`, which selects the client key alias per hostname according to the `openidm.ssl.host.aliases` mappings.
+
+
+[#security-management-service]
+== Security Management Service
+
+OSGi service class:: `org.forgerock.openidm.security.SecurityManager`
+OSGi persistent identifier:: `org.forgerock.openidm.security`
+Configuration file:: none
+Router mapping:: `/security/*`
+
+The service binds to the keystore and truststore services and routes requests to the following sub-endpoints:
+
+[cols="2,1,2",options="header"]
+|===
+| Endpoint | Resource kind | Supported operations
+
+| `/security/keystore`
+| singleton
+| read, actions `generateCert` and `generateCSR`
+
+| `/security/keystore/cert`
+| collection
+| create, read, update, delete
+
+| `/security/keystore/privatekey`
+| collection
+| create, update, delete
+
+| `/security/truststore`
+| singleton
+| read, actions `generateCert` and `generateCSR`
+
+| `/security/truststore/cert`
+| collection
+| create, read, update, delete
+|===
+
+Every operation that changes a store writes the store file back to disk and reloads the JVM default SSL context (see <<ssl-context-reload>>).
+
+[#reading-store-contents]
+=== Reading Store Contents
+
+A read on `/security/keystore` or `/security/truststore` returns the store metadata:
+
+* `type` – the keystore type (for example `JCEKS`).
+* `provider` – the security provider of the loaded store.
+* `aliases` – the list of all entry aliases in the store.
+
+[#generating-a-self-signed-certificate]
+=== Generating a Self-Signed Certificate
+
+The `generateCert` action generates a self-signed certificate with a new private key and stores both under the requested alias.
+The request fails with a conflict when the alias already exists.
+`/security/keystore` and `/security/truststore` share the same action-handling code, so invoking `generateCert` against the truststore stores an identical private-key entry there, not just a plain certificate.
+
+The action accepts the following request content fields:
+
+`alias`::
+Alias to store the certificate under.
+Required.
+
+`domainName`::
+Common name (CN) of the certificate subject.
+Required.
+Unlike `generateCSR`, this action accepts no organization or locality subject fields.
+The certificate subject's `OU`, `O`, `L`, `ST`, and `C` attributes are always `None`.
+
+`algorithm`::
+Key algorithm.
+Default: `RSA`.
+The service passes this value directly to the underlying JCE `KeyPairGenerator` algorithm lookup, with no allowlist beyond what the JCE provider accepts.
+
+`keySize`::
+Key size in bits.
+Default: `2048`.
+
+`signatureAlgorithm`::
+Signature algorithm.
+Default: `SHA512WithRSAEncryption`.
+The service passes this value directly to the underlying JCE `Signature` algorithm lookup, with no allowlist beyond what the JCE provider accepts.
+
+`validFrom`, `validTo`::
+Validity period boundaries.
+ISO-8601 timestamp (for example `2011-09-09T14:58:17.6+02:00`).
+Optional.
+When absent, `validFrom` defaults to 30 days before the request and `validTo` defaults to 10 years after the request.
+A value that does not parse as an ISO-8601 timestamp fails the request with an internal server error.
+
+The response contains the certificate representation:
+
+* `_id` – the alias.
+* `type` – the certificate type.
+* `cert` – the PEM-encoded certificate.
+* `publicKey` – a JSON representation of the public key.
+* `issuer` – the issuer attributes (`C`, `ST`, `L`, `OU`, `O`, `CN`).
+* `notBefore`, `notAfter` – the validity period.
+
+[#generating-a-certificate-signing-request]
+=== Generating a Certificate Signing Request
+
+The `generateCSR` action generates a new key pair and returns a PKCS#10 certificate signing request for it.
+The service builds the subject distinguished name from the request fields `CN` (required) and `OU`, `O`, `L`, `ST`, `C` (each defaults to `None`).
+The `alias`, `algorithm`, `keySize`, and `signatureAlgorithm` fields work as for `generateCert`.
+Like `generateCert`, this action runs identically regardless of which singleton endpoint invokes it.
+
+The response contains:
+
+* `_id` – the alias.
+* `csr` – the PEM-encoded certificate signing request.
+* `publicKey` – a JSON representation of the public key.
+
+The service does not write the generated key pair to the keystore at this point.
+The xref:crypto.adoc[Crypto Service] encrypts it with the key named by `openidm.config.crypto.alias` and the default cipher `AES/CBC/PKCS5Padding`, and stores it in the repository under `security/keys/<alias>`.
+The service picks up the stored key pair later, when a client installs the signed certificate (see <<installing-a-signed-certificate>>).
+
+[#managing-certificates]
+=== Managing Certificates
+
+The `/security/keystore/cert` and `/security/truststore/cert` endpoints manage plain certificate entries.
+The entry alias is the resource ID.
+Read and delete do not check the entry's type before acting on it.
+They operate on whatever entry the alias holds, including a private-key entry that `generateCert` stored on the truststore endpoint (see <<generating-a-self-signed-certificate>>).
+Reading such an entry never exposes its private key.
+The read path only ever extracts and returns a `Certificate` object, never the key itself.
+
+Create and update take the following content fields:
+
+`cert`::
+The PEM-encoded certificate.
+Required.
+A value that does not parse as a certificate fails the request with an internal server error.
+
+`type`::
+The certificate type.
+Default: `X509`.
+
+Create requires a client-supplied resource ID and fails with a conflict when the alias already exists.
+Update has no such check, and calling it on an alias that does not yet exist creates the entry, the same as create.
+Create and update both return the request content unchanged, not a re-parsed certificate representation.
+Read returns the same certificate representation as `generateCert`.
+Delete removes the entry from the store.
+Query and patch are not supported.
+
+[#installing-a-signed-certificate]
+=== Installing a Signed Certificate with Its Private Key
+
+The `/security/keystore/privatekey` endpoint stores a private key entry with its certificate chain.
+The entry alias is the resource ID.
+When installing a certificate for a key pair obtained through `generateCSR`, this alias must match the one used for that call.
+
+Create and update take the following content fields:
+
+`certs`::
+The certificate chain as a list of PEM-encoded certificates.
+Required.
+
+`privateKey`::
+The PEM-encoded private key.
+Optional.
+When absent, the service loads the key pair that a previous `generateCSR` call stored in the repository for the same alias.
+When no stored key pair exists either, the request fails.
+
+Create fails with a conflict when the alias already exists, but update has no such check and upserts, the same as the cert endpoints.
+The service verifies that the private key matches the first certificate in the chain by signing and verifying test data.
+A mismatch fails the request with a bad-request error, and read is not supported on this endpoint.
+Create and update both return the request content unchanged, not a re-parsed representation.
+This response is the only way to confirm what the service stored.
+Delete removes only the keystore entry, not any repository-stored key pair a prior `generateCSR` left for the same alias.
+
