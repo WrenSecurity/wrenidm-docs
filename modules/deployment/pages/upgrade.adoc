@@ -3,9 +3,259 @@
 This guide provides instructions for upgrading Wren:IDM to the new version.
 
 
-== Wren:IDM 7
+== Wren:IDM 7.3.0
 
-If you are upgrading to the Wren:IDM 7, please follow the steps below.
+If you are upgrading to the Wren:IDM 7.3.0, please follow the steps below.
+
+
+=== Migrate Felix web console configuration
+
+The Felix web console is now disabled by default and the built-in Felix fallback credentials are no longer accepted.
+The web console is available only when it is explicitly enabled in the `conf/felix.webconsole.json` file.
+
+Add the following property to the `conf/config.properties` file, so that the Felix web console accepts only the Wren:IDM security provider:
+
+[source,diff]
+----
++ # Require the Wren:IDM security provider for the Felix web console. This disables the built-in Felix
++ # fallback credentials; the console is available only when enabled in conf/felix.webconsole.json.
++ felix.webconsole.security.providers=wrenidm
+----
+
+If you use the Felix web console, enable it in the `conf/felix.webconsole.json` file and set a strong password:
+
+.Felix web console configuration
+[example]
+====
+[source,diff]
+----
+{
++ "enabled" : true,
+  "username" : "admin",
+- "password" : "admin"
++ "password" : "<strong-password>"
+}
+----
+====
+
+[NOTE]
+====
+When the `enabled` property is missing, the web console is disabled and all requests to it are rejected with `404 Not Found`.
+====
+
+
+=== Review configuration save setting
+
+The `felix.fileinstall.enableConfigSave` property in the `conf/config.properties` file is now respected.
+In previous versions, this property was ignored and configuration changes (for example changes made through the REST API or the Admin UI) were always written back to the configuration files in the `conf/` directory.
+
+The default `config.properties` file in Wren:IDM 7.2.0 and earlier contains `felix.fileinstall.enableConfigSave=false`.
+If you keep this line, configuration changes will no longer be written back to the configuration files after the upgrade.
+To keep the previous behavior, remove or comment out the property:
+
+[source,diff]
+----
+- # Disable file configuration update
+- felix.fileinstall.enableConfigSave=false
++ # Configuration changes are written back to the configuration files by default,
++ # uncomment the following line to disable it.
++ #felix.fileinstall.enableConfigSave=false
+----
+
+The deprecated `felix.fileinstall.disableConfigSave` property is no longer supported.
+If you use it, replace it with `felix.fileinstall.enableConfigSave`.
+
+
+=== Update connector bundle versions
+
+The bundled Wren:ICF connectors have been upgraded:
+
+* Groovy connector to version `1.5.4.0`
+* LDAP connector to version `1.5.3.3`
+
+If your provisioner configuration files (`conf/provisioner.openicf-*.json`) reference an exact connector version, or a version range that does not include the new version, update the `bundleVersion` field:
+
+.Provisioner bundle version migration
+[example]
+====
+[source,diff]
+----
+{
+  "connectorRef" : {
+    "bundleName" : "org.wrensecurity.wrenicf.connectors.groovy-connector",
+-   "bundleVersion" : "1.5.3.1",
++   "bundleVersion" : "1.5.4.0",
+    "connectorName" : "org.forgerock.openicf.connectors.scriptedrest.ScriptedRESTConnector"
+  },
+  ...
+}
+----
+====
+
+If you build custom scripted connectors with the custom scripted connector bundler, rebuild them against the Groovy connector `1.5.4.0`.
+
+
+=== Migrate Scripted REST connector scripts
+
+The `http-builder` library (`groovyx.net.http`) is no longer shipped with the Groovy connector and Wren:IDM.
+Scripted REST connector scripts that use `RESTClient` or other `groovyx.net.http` classes must be migrated to the Apache HttpClient API.
+
+Follow these steps to migrate your scripts:
+
+. Migrate customizer script
++
+--
+Remove the `decorate` closure that creates the `RESTClient` instance and configure the HTTP client in the `init` closure instead (for example default headers, cookie store or preemptive authentication).
+The reference https://github.com/WrenSecurity/wrenicf-groovy-connector/blob/1.5.4.0/src/main/resources/org/forgerock/openicf/connectors/scriptedrest/CustomizerScript.groovy[CustomizerScript.groovy^] is available in the GitHub repository.
+--
+
+. Migrate operation scripts
++
+--
+Remove all `@Grab` annotations and `groovyx.net.http` imports.
+Use the `connection` binding variable (an `org.apache.http.client.HttpClient` instance) instead of the `customizedConnection` variable to execute HTTP requests.
+
+.Delete script migration
+[example]
+====
+[source,groovy]
+----
+// Before
+@Grab(group = 'org.codehaus.groovy.modules.http-builder', module = 'http-builder', version = '0.7.1')
+import groovyx.net.http.RESTClient
+
+def connection = customizedConnection as RESTClient
+
+connection.delete(path: '/users/' + uid.uidValue)
+...
+// After
+import org.apache.http.HttpResponse
+import org.apache.http.client.HttpClient
+import org.apache.http.client.ResponseHandler
+import org.apache.http.client.methods.HttpDelete
+import org.identityconnectors.framework.common.exceptions.ConnectorException
+import org.identityconnectors.framework.common.exceptions.UnknownUidException
+
+def connection = connection as HttpClient
+
+def path = 'users/' + URLEncoder.encode(uid.uidValue, 'UTF-8')
+connection.execute(new HttpDelete(configuration.serviceAddress.resolve(path)), { HttpResponse response ->
+    def status = response.statusLine.statusCode
+    if (status == 404) {
+        throw new UnknownUidException(uid, objectClass)
+    }
+    if (status >= 300) {
+        throw new ConnectorException(response.statusLine.toString())
+    }
+} as ResponseHandler)
+...
+----
+====
+
+[NOTE]
+====
+Unlike `RESTClient`, Apache HttpClient does not throw an exception for error HTTP status codes and does not parse the response body.
+Check the response status code and parse the response body (for example with `groovy.json.JsonSlurper`) in your scripts.
+====
+--
+
+
+=== Review customized authorization scripts
+
+The default authorization scripts have been hardened and some requests that were previously allowed are now rejected:
+
+* End users can only read workflow process definitions (`workflow/processdefinition/*`).
+* End users can only claim a task (set themselves as the assignee) or return it to the queue (set the assignee to `null`) when updating a workflow task instance.
+Only users with the `openidm-admin` or `openidm-tasks-manager` role can assign a task to other users.
+* When a request to start a workflow process contains the `_processDefinitionId` field, the authorization is evaluated against this process definition only and the `_key` field is ignored.
+* The source (`from`) field of patch `copy` and `move` operations is now also checked against the editable managed object properties.
+Patch operations that copy or move a value from a private property are rejected.
+
+If your project contains customized copies of the `script/access.js` or `script/router-authz.js` files, review the reference https://github.com/WrenSecurity/wrenidm/blob/7.3.0/openidm-zip/src/main/resources/script/access.js[access.js^] and https://github.com/WrenSecurity/wrenidm/blob/7.3.0/openidm-zip/src/main/resources/bin/defaults/script/router-authz.js[router-authz.js^] files from the GitHub repository and apply the changes to your scripts.
+
+.Workflow process definition access rule
+[example]
+====
+[source,diff]
+----
+{
+    "pattern"   : "workflow/processdefinition/*",
+    "roles"     : "openidm-authorized",
+-   "methods"   : "*",
+-   "actions"   : "read",
++   "methods"   : "read",
++   "actions"   : "",
+    "customAuthz": "isOneOfMyWorkflows()"
+},
+----
+====
+
+
+== Wren:IDM 7.2.0
+
+If you are upgrading to the Wren:IDM 7.2.0, please follow the steps below.
+
+
+=== Migrate custom scripts to lodash 4
+
+The lodash library available to server-side JavaScript scripts (`bin/defaults/script/lib/lodash.js`) has been upgraded from version 2.4.1 to version 4.18.1.
+Several functions were removed or renamed in lodash 4, so you must update all custom scripts that use them, including customized copies of the default scripts (such as `policy.js` or `router-authz.js`) in your project.
+
+The following table lists the most commonly used functions that must be replaced:
+
+[cols="1,1"]
+|===
+|lodash 2 |lodash 4
+
+|`_.contains`
+|`_.includes`
+
+|`_.pluck`
+|`_.map`
+
+|`_.findWhere`
+|`_.find`
+
+|`_.where`
+|`_.filter`
+
+|`_.any`
+|`_.some`
+
+|`_.all`
+|`_.every`
+
+|`_.pairs`
+|`_.toPairs`
+
+|`_.indexBy`
+|`_.keyBy`
+|===
+
+.Policy script migration
+[example]
+====
+[source,diff]
+----
+- if (value !== undefined && !_.contains(params.types, type)) {
++ if (value !== undefined && !_.includes(params.types, type)) {
+...
+- managedObjectConfig = _.findWhere(managedConfig.objects, {"name": objectName});
++ managedObjectConfig = _.find(managedConfig.objects, {"name": objectName});
+----
+====
+
+See the https://github.com/lodash/lodash/wiki/Changelog#v400[lodash changelog^] for the complete list of changes.
+
+
+== Wren:IDM 7.1.0
+
+No manual migration is needed when upgrading to the Wren:IDM 7.1.0.
+
+
+== Wren:IDM 7.0.0
+
+If you are upgrading to the Wren:IDM 7.0.0, please follow the steps below.
 
 
 === Migrate Wren:ICF connector bundle names
