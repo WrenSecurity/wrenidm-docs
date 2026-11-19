@@ -1,3 +1,368 @@
 = Authentication
 
-NOTE: TBD: Authentication modules, access.js description
+_Authentication Service_ handles user authentication for Wren:IDM REST API.
+It evaluates incoming requests against a configured chain of authentication modules and manages JWT-based sessions.
+
+OSGi service class:: `org.forgerock.openidm.auth.AuthenticationService`
+OSGi persistent identifier:: `org.forgerock.openidm.authentication`
+Configuration file:: `authentication.json`
+Router mapping:: `/authentication`
+
+
+== Configuration
+
+The authentication service is configured through `authentication.json` file in `project/conf` directory.
+The configuration consists of a session module and an ordered list of authentication modules:
+
+[source,json]
+----
+{
+  "serverAuthContext" : {
+    "sessionModule" : {
+      "name" : "JWT_SESSION",
+      "properties" : { }
+    },
+    "authModules" : [
+      {
+        "name" : "MODULE_NAME",
+        "properties" : { },
+        "enabled" : true
+      }
+    ]
+  }
+}
+----
+
+When a request is received, the authentication service iterates through the configured `authModules` in order.
+The first module that successfully authenticates the request determines the identity and roles of the caller.
+If no module succeeds, the request is rejected.
+
+
+== Session Module
+
+Session module manages authenticated sessions using signed JWT tokens stored as HTTP cookies.
+
+.Session module properties
+* `keyAlias` – alias of the signing key in the keystore
+* `privateKeyPassword` – password for the private key
+* `keystoreType` – keystore type (e.g. `JCEKS`)
+* `keystoreFile` – path to the keystore file
+* `keystorePassword` – keystore password
+* `maxTokenLifeMinutes` – maximum token lifetime in minutes (e.g. `"120"`)
+* `tokenIdleTimeMinutes` – token idle timeout in minutes (e.g. `"30"`)
+* `sessionOnly` – flag indicating whether the cookie is a session cookie (deleted when browser is closed)
+* `isHttpOnly` – flag indicating whether the cookie is HTTP-only (not accessible via JavaScript)
+
+
+[[auth-modules]]
+== Authentication Modules
+
+The following authentication modules are available:
+
+* <<module-static-user>> – authenticates a single static user (e.g. anonymous access)
+* <<module-managed-user>> – authenticates against managed user objects
+* <<module-internal-user>> – authenticates against internal repository users
+* <<module-client-cert>> – authenticates using X.509 client certificates (mTLS)
+* <<module-passthrough>> – delegates authentication to an external connector or endpoint
+* <<module-trusted-attribute>> – trusts authentication identity from a request attribute
+* <<module-oauth>> – authenticates using OAuth 2.0 access tokens
+* <<module-openid-connect>> – authenticates using OpenID Connect tokens
+* <<module-iwa>> – authenticates using Integrated Windows Authentication (Kerberos/SPNEGO)
+
+
+[[module-static-user]]
+=== STATIC_USER
+
+Authenticates a single user with a preconfigured username and password.
+Typically used to allow anonymous or self-registration access.
+
+.Properties
+* `username` – static username
+* `password` – static password
+* `queryOnResource` – resource path for looking up additional user details (e.g. `repo/internal/user`)
+* `defaultUserRoles` – list of roles assigned to the authenticated user
+
+.Example configuration for anonymous access
+[source,json]
+----
+{
+  "name" : "STATIC_USER",
+  "properties" : {
+    "queryOnResource" : "repo/internal/user",
+    "username" : "anonymous",
+    "password" : "anonymous",
+    "defaultUserRoles" : [
+      "openidm-reg"
+    ]
+  },
+  "enabled" : true
+}
+----
+
+
+[[module-managed-user]]
+=== MANAGED_USER
+
+Authenticates against managed user objects stored in the Wren:IDM repository.
+User credentials are validated using a predefined query.
+
+.Properties
+* `queryId` – query identifier for credential lookup (e.g. `credential-query`)
+* `queryOnResource` – resource path to query (e.g. `managed/user`)
+* `propertyMapping` – maps authentication properties to managed object fields
+** `authenticationId` – field used as authentication identifier (e.g. `username`)
+** `userCredential` – field containing user's password (e.g. `password`)
+** `userRoles` – field containing user's authorization roles (e.g. `authzRoles`)
+* `defaultUserRoles` – list of default roles
+* `augmentSecurityContext` – script to customize the security context after successful authentication (see <<augment-security-context>>)
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "MANAGED_USER",
+  "properties" : {
+    "augmentSecurityContext" : {
+      "type" : "text/javascript",
+      "source" : "require('auth/customAuthz').setProtectedAttributes(security)"
+    },
+    "queryId" : "credential-query",
+    "queryOnResource" : "managed/user",
+    "propertyMapping" : {
+      "authenticationId" : "username",
+      "userCredential" : "password",
+      "userRoles" : "authzRoles"
+    },
+    "defaultUserRoles" : [ ]
+  },
+  "enabled" : true
+}
+----
+
+
+[[module-internal-user]]
+=== INTERNAL_USER
+
+Authenticates against internal repository users (e.g. `openidm-admin`).
+These users are stored in the `repo/internal/user` resource and are intended for administrative or system access.
+
+.Properties
+* `queryId` – query identifier for credential lookup (e.g. `credential-internaluser-query`)
+* `queryOnResource` – resource path to query (e.g. `repo/internal/user`)
+* `propertyMapping` – maps authentication properties to internal user fields
+** `authenticationId` – field used as authentication identifier (e.g. `username`)
+** `userCredential` – field containing user's password (e.g. `password`)
+** `userRoles` – field containing user's roles (e.g. `roles`)
+* `defaultUserRoles` – list of default roles
+
+.Example configuration
+[source,json]
+----
+{
+  "name" : "INTERNAL_USER",
+  "properties" : {
+    "queryId" : "credential-internaluser-query",
+    "queryOnResource" : "repo/internal/user",
+    "propertyMapping" : {
+      "authenticationId" : "username",
+      "userCredential" : "password",
+      "userRoles" : "roles"
+    },
+    "defaultUserRoles" : [ ]
+  },
+  "enabled" : true
+}
+----
+
+
+[[module-client-cert]]
+=== CLIENT_CERT
+
+Authenticates using X.509 client certificates presented during TLS handshake (mutual TLS).
+The certificate's Distinguished Name (DN) is used as the authentication identifier.
+
+.Properties
+* `queryOnResource` – resource path for certificate validation (e.g. `security/truststore`)
+* `defaultUserRoles` – list of roles assigned to authenticated certificate users (e.g. `openidm-cert`)
+* `allowedAuthenticationIdPatterns` – list of regular expression patterns that the certificate DN must match (empty list allows all)
+* `augmentSecurityContext` – script to customize the security context (see <<augment-security-context>>)
+
+.Example configuration with DN pattern restriction
+[source,json]
+----
+{
+  "name" : "CLIENT_CERT",
+  "properties" : {
+    "augmentSecurityContext" : {
+      "type" : "text/javascript",
+      "file" : "auth/mapUserFromClientCert.js"
+    },
+    "queryOnResource" : "managed/user",
+    "defaultUserRoles" : [
+      "openidm-cert"
+    ],
+    "allowedAuthenticationIdPatterns" : [
+      "CN=[a-z]+, OU=Users, O=Wren Security"
+    ]
+  },
+  "enabled" : true
+}
+----
+
+When using client certificate authentication, it is common to use an `augmentSecurityContext` script to map the certificate DN to a managed user and resolve their roles.
+The following script extracts the username from the certificate CN, looks up the corresponding managed user and assigns their authorization roles:
+
+[source,js]
+----
+(function () {
+  var matchPattern = /^CN=([a-z]+)(?:,.*)?$/;
+  var userNameMatch = security.authenticationId.match(matchPattern);
+  var userName = userNameMatch != null ? userNameMatch[1] : null;
+
+  if (!userName) {
+    throw { code: 401, message: 'Access denied' };
+  }
+
+  var managedUsers = openidm.query('managed/user', {
+    _queryFilter: '/userName eq "' + userName + '"'
+  }, ['*', 'authzRoles']);
+
+  if (!managedUsers.result.length) {
+    throw { code: 401, message: 'Access denied, user not found' };
+  }
+
+  var managedUser = managedUsers.result[0];
+
+  security.authorization = {
+    id: managedUser._id,
+    moduleId: security.authorization.moduleId,
+    component: 'managed/user',
+    roles: managedUser.authzRoles
+      ? security.authorization.roles.concat(managedUser.authzRoles.map(function (role) {
+          return org.forgerock.json.resource.ResourcePath.valueOf(role._ref).leaf() + '';
+        }))
+      : security.authorization.roles
+  };
+})();
+----
+
+
+[[module-passthrough]]
+=== PASSTHROUGH
+
+Delegates authentication to an external system through an OpenICF connector or another Wren:IDM endpoint.
+The user's credentials are forwarded to the specified resource for validation.
+
+.Properties
+* `queryOnResource` – resource path to delegate authentication to (e.g. `system/ldap/account`)
+* `propertyMapping` – maps authentication properties
+** `authenticationId` – field used as authentication identifier
+** `userCredential` – field containing user's password
+** `userRoles` – field containing user's roles
+** `groupMembership` – field containing user's group membership
+* `defaultUserRoles` – list of default roles
+* `groupRoleMapping` – mapping of external group names to Wren:IDM roles
+* `groupComparisonMethod` – method for comparing group membership values (`equals`, `caseInsensitive`, `ldap`, `regexp`)
+* `augmentSecurityContext` – script to customize the security context (see <<augment-security-context>>)
+
+
+[[module-trusted-attribute]]
+=== TRUSTED_ATTRIBUTE
+
+Trusts an authentication identity provided as a request attribute by an external component (e.g. a reverse proxy or servlet filter).
+
+.Properties
+* `queryOnResource` – resource path for user lookup
+* `authenticationIdAttribute` – name of the request attribute containing the authenticated user identity
+* `defaultUserRoles` – list of default roles
+
+
+[[module-oauth]]
+=== OAUTH
+
+Authenticates using an OAuth 2.0 access token.
+The token is validated against a configured OAuth 2.0 provider.
+
+.Properties
+* `augmentSecurityContext` – script to customize the security context (see <<augment-security-context>>)
+
+
+[[module-openid-connect]]
+=== OPENID_CONNECT
+
+Authenticates using an OpenID Connect ID token.
+
+.Properties
+* `augmentSecurityContext` – script to customize the security context (see <<augment-security-context>>)
+
+
+[[module-iwa]]
+=== IWA
+
+Authenticates using Integrated Windows Authentication (Kerberos / SPNEGO).
+
+
+[[augment-security-context]]
+== Security Context Augmentation
+
+Authentication modules support the `augmentSecurityContext` property, which allows executing a script after successful authentication.
+The script can modify the security context, for example to resolve additional roles or enrich the user's authorization profile.
+
+The script receives the following global variables:
+
+* `security` – security context object with the following properties:
+** `authenticationId` – identifier of the authenticated user
+** `authorization` – authorization context (containing `id`, `component`, `roles` and `moduleId`)
+* `properties` – authentication module properties
+* `httpRequest` – the HTTP request object
+
+The script is configured either inline or as a file reference:
+
+[source,json]
+----
+"augmentSecurityContext" : {
+  "type" : "text/javascript",
+  "source" : "require('auth/customAuthz').setProtectedAttributes(security)"
+}
+----
+
+[source,json]
+----
+"augmentSecurityContext" : {
+  "type" : "text/javascript",
+  "file" : "auth/mapUserFromClientCert.js"
+}
+----
+
+
+== REST API
+
+The authentication service exposes the following actions on `/openidm/authentication`:
+
+* `reauthenticate` – re-authenticates the current session using the password provided in `X-OpenIDM-Reauth-Password` header
+* `getAuthToken` – retrieves an authentication token from a configured OAuth / OpenID Connect provider
+* `logout` – invalidates the current JWT session cookie
+
+
+=== Example: Reauthenticate
+
+[,console]
+----
+curl \
+  -H "X-OpenIDM-Reauth-Password: openidm-admin" \
+  -u openidm-admin:openidm-admin \
+  "http://localhost:8080/openidm/authentication?_action=reauthenticate" \
+  -XPOST
+----
+
+
+== Default Configuration
+
+The default `authentication.json` configures the following authentication chain:
+
+. *STATIC_USER* – allows anonymous access with `openidm-reg` role
+. *MANAGED_USER* – authenticates end users against `managed/user`
+. *INTERNAL_USER* – authenticates administrative users against `repo/internal/user`
+. *CLIENT_CERT* – authenticates users presenting a trusted X.509 client certificate
+
+The default configuration is available on the Wren:IDM GitHub https://github.com/WrenSecurity/wrenidm/blob/main/openidm-zip/src/main/resources/conf/authentication.json[repository^].
